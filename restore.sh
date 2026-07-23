@@ -15,13 +15,16 @@ echo "[1/3] 恢复技能到 $HERMES_DIR/skills/ ..."
 mkdir -p "$HERMES_DIR/skills/trading"
 for skill_dir in "$SCRIPT_DIR/skills"/*/; do
     skill_name=$(basename "$skill_dir")
-    if [ "$skill_name" = "trading-ops-reliability" ]; then
-        cp -r "$skill_dir" "$HERMES_DIR/skills/trading/$skill_name"
-        echo "  ✅ trading/$skill_name"
-    else
-        cp -r "$skill_dir" "$HERMES_DIR/skills/$skill_name"
-        echo "  ✅ $skill_name"
-    fi
+    case "$skill_name" in
+        trading-ops-reliability|binance-executor)
+            cp -r "$skill_dir" "$HERMES_DIR/skills/trading/$skill_name"
+            echo "  ✅ trading/$skill_name"
+            ;;
+        *)
+            cp -r "$skill_dir" "$HERMES_DIR/skills/$skill_name"
+            echo "  ✅ $skill_name"
+            ;;
+    esac
 done
 
 # 2. 恢复脚本
