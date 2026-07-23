@@ -541,55 +541,56 @@ def manage_position(symbol: str, plan: dict) -> dict:
     if len(take_profits) >= 1:
         tp1 = take_profits[0]
         tp1_price = tp1["price"]
-        tp1_hit = (mark_price >= tp1_price) if direction == "long" else (mark_price <= tp1_price)
 
-        if tp1_hit:
-            # 检查 Algo 挂单状态
-            algo_orders = get_open_algo_orders(symbol)
-            sl_orders = [o for o in algo_orders if o.get("orderType") == "STOP_MARKET"
-                         and o.get("side") == ("SELL" if direction == "long" else "BUY")]
-            tp1_orders = [o for o in algo_orders if o.get("orderType") == "TAKE_PROFIT_MARKET"
-                          and abs(float(o.get("triggerPrice", 0)) - tp1_price) < 0.0001 * tp1_price]
+        # 不依赖当前价格判断 TP1 是否触发，直接查 Algo 挂单状态：
+        # - TP1 单还在 → 币安尚未执行，等待
+        # - TP1 单消失 + 止损在原位 → 币安已执行 TP1，需移保本
+        # - TP1 单消失 + 止损不在原位 → 已处理过
+        algo_orders = get_open_algo_orders(symbol)
+        sl_orders = [o for o in algo_orders if o.get("orderType") == "STOP_MARKET"
+                     and o.get("side") == ("SELL" if direction == "long" else "BUY")]
+        tp1_orders = [o for o in algo_orders if o.get("orderType") == "TAKE_PROFIT_MARKET"
+                      and abs(float(o.get("triggerPrice", 0)) - tp1_price) < 0.0001 * tp1_price]
 
-            original_sl = plan.get("stop_loss")
-            sl_at_original = any(
-                abs(float(o.get("triggerPrice", 0)) - original_sl) < 0.0001 * original_sl
-                for o in sl_orders
-            )
+        original_sl = plan.get("stop_loss")
+        sl_at_original = any(
+            abs(float(o.get("triggerPrice", 0)) - original_sl) < 0.0001 * original_sl
+            for o in sl_orders
+        )
 
-            if tp1_orders:
-                # TP1 Algo 单还在 → 币安尚未执行，不干预，等币安自己触发
-                result["actions"].append({"action": "tp1_pending",
-                                          "msg": "TP1 Algo单待触发，等待币安执行"})
+        if tp1_orders:
+            # TP1 Algo 单还在 → 币安尚未执行，不干预，静默等待
+            pass
 
-            elif sl_at_original:
-                # TP1 Algo 单已消失（币安已执行平仓）+ 止损还在原位
-                # → 只需移保本，不再重复平仓
-                log.info(f"{symbol} TP1 已由币安执行，执行移保本")
-                exit_side = "SELL" if direction == "long" else "BUY"
+        elif sl_at_original:
+            # TP1 Algo 单已消失（币安已执行平仓）+ 止损还在原位
+            # → 只需移保本，不再重复平仓
+            log.info(f"{symbol} TP1 已由币安执行，执行移保本")
+            exit_side = "SELL" if direction == "long" else "BUY"
 
-                # 撤销旧止损（Algo 端点）
-                for o in sl_orders:
-                    try:
-                        api_delete("/fapi/v1/algoOrder", {"symbol": symbol, "algoId": str(o["algoId"])})
-                    except Exception:
-                        pass
-
-                # 挂新止损（保本 = 入场价，数量 = 当前剩余仓位）
+            # 撤销旧止损（Algo 端点）
+            for o in sl_orders:
                 try:
-                    new_sl = round_price(symbol, entry_price)
-                    remaining_qty = abs(amount)
-                    _place_conditional_order(
-                        symbol, exit_side, "STOP_MARKET",
-                        stop_price=new_sl,
-                        quantity=remaining_qty, position_side=pos_side)
-                    result["actions"].append({"action": "move_sl_to_breakeven",
-                                              "new_sl": new_sl, "remaining_qty": remaining_qty, "status": "OK"})
-                    log.info(f"止损移到保本 {new_sl}（剩余 {remaining_qty}）✅")
-                except Exception as e:
-                    result["actions"].append({"action": "move_sl_to_breakeven", "status": "ERROR", "msg": str(e)})
-            else:
-                result["actions"].append({"action": "tp1_already_handled", "msg": "止损已移过，无需操作"})
+                    api_delete("/fapi/v1/algoOrder", {"symbol": symbol, "algoId": str(o["algoId"])})
+                except Exception:
+                    pass
+
+            # 挂新止损（保本 = 入场价，数量 = 当前剩余仓位）
+            try:
+                new_sl = round_price(symbol, entry_price)
+                remaining_qty = abs(amount)
+                _place_conditional_order(
+                    symbol, exit_side, "STOP_MARKET",
+                    stop_price=new_sl,
+                    quantity=remaining_qty, position_side=pos_side)
+                result["actions"].append({"action": "move_sl_to_breakeven",
+                                          "new_sl": new_sl, "remaining_qty": remaining_qty, "status": "OK"})
+                log.info(f"止损移到保本 {new_sl}（剩余 {remaining_qty}）✅")
+            except Exception as e:
+                result["actions"].append({"action": "move_sl_to_breakeven", "status": "ERROR", "msg": str(e)})
+        else:
+            # TP1 单已消失 + 止损不在原位 → 已处理过，静默
+            pass
 
     return result
 
