@@ -1,0 +1,4 @@
+interface:
+  display_name: "交易执行计划器"
+  short_description: "把加密合约分析转换成可执行交易计划。"
+  default_prompt: "使用 $trade-execution-planner，把这个加密合约机会转换成入场、止损、止盈、风险仓位和订单参数。"

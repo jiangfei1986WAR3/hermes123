@@ -1,0 +1,4 @@
+interface:
+  display_name: "交易指挥中心"
+  short_description: "协调扫描、分析、执行计划、监控、风控和复盘。"
+  default_prompt: "使用 $trading-command-center，协调我的加密合约交易流程，从扫描或分析进入执行计划、监控、风控和复盘。"

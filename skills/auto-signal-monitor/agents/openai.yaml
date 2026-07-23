@@ -1,0 +1,4 @@
+interface:
+  display_name: "Auto Signal Monitor"
+  short_description: "Turn trade plans into market alerts"
+  default_prompt: "Use $auto-signal-monitor to create a monitored signal plan for UNIUSDT with audible alerts."

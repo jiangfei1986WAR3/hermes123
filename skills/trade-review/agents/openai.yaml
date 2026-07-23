@@ -1,0 +1,4 @@
+interface:
+  display_name: "交易复盘"
+  short_description: "按交易规则复盘盈亏和执行问题。"
+  default_prompt: "使用 $trade-review 按我的交易框架复盘这笔合约交易，找出执行问题、有效逻辑和规则改进点。"

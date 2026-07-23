@@ -1,0 +1,4 @@
+interface:
+  display_name: "交易分析"
+  short_description: "分析合约走势、入场、止损和加减仓。"
+  default_prompt: "使用 $trading-analysis 按我的交易框架分析这个合约走势、关键位置和操作场景。"

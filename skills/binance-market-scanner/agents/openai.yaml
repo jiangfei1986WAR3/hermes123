@@ -1,0 +1,4 @@
+interface:
+  display_name: "币安市场扫描"
+  short_description: "扫描币安合约并保存排序报告。"
+  default_prompt: "使用 $binance-market-scanner 扫描币安U本位永续合约，保存JSON/CSV结果，并总结最接近信号的交易对。"

@@ -1,0 +1,4 @@
+interface:
+  display_name: "风险管理"
+  short_description: "计算仓位、止损距离和杠杆风险。"
+  default_prompt: "使用 $risk-manager 计算这笔合约交易的仓位、止损距离、风险金额、杠杆暴露和强平风险。"
