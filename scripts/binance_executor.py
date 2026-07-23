@@ -250,54 +250,67 @@ def _place_conditional_order(symbol: str, side: str, order_type: str,
                              position_side: str = None,
                              working_type: str = "MARK_PRICE") -> dict:
     """
-    挂条件单（STOP_MARKET / TAKE_PROFIT_MARKET），自动尝试多种参数组合。
-    部分交易对在某些参数组合下返回 -4120，需要回退到备选方案。
-    优先级：
-      1. closePosition=true（最简洁，全仓止损）
-      2. quantity + reduceOnly=true（标准减仓止盈）
-      3. quantity only（Hedge Mode 下 positionSide 已锁定方向）
+    挂条件单（STOP_MARKET / TAKE_PROFIT_MARKET）via Algo Order API。
+
+    2025-11 起币安将条件单从 /fapi/v1/order 迁移到 /fapi/v1/algoOrder，
+    旧端点返回 -4120 (STOP_ORDER_SWITCH_ALGO)。
+
+    参数映射（旧 → 新）：
+      stopPrice   → triggerPrice
+      新增 algoType = "CONDITIONAL"
+      positionSide 必传（LONG / SHORT，双向持仓模式）
+
+    返回 algoId（非 orderId）。
     """
-    combos = [
-        # 组合1: closePosition（不传 quantity）
-        {"close_position": True, "reduce_only": False, "qty": None},
-        # 组合2: quantity + reduceOnly
-        {"close_position": False, "reduce_only": True, "qty": quantity},
-        # 组合3: quantity only（Hedge Mode 安全：positionSide 已限定方向）
-        {"close_position": False, "reduce_only": False, "qty": quantity},
-    ]
-    last_err = None
-    for combo in combos:
-        try:
-            return place_order(
-                symbol, side, order_type,
-                quantity=combo["qty"],
-                stop_price=stop_price,
-                close_position=combo["close_position"],
-                reduce_only=combo["reduce_only"],
-                working_type=working_type,
-                position_side=position_side)
-        except Exception as e:
-            last_err = e
-            err_text = ""
-            if hasattr(e, 'response') and e.response is not None:
-                err_text = e.response.text
-            # -4120 = 参数组合不支持，尝试下一个；其他错误直接抛出
-            if "-4120" not in err_text and "-1106" not in err_text:
-                raise
-            log.warning(f"条件单参数组合被拒({err_text[:80]})，尝试下一组合...")
-    # 所有组合都失败
-    raise last_err
+    if not position_side:
+        # 安全默认：平仓方向推断持仓方向
+        position_side = "LONG" if side == "SELL" else "SHORT"
+
+    params = {
+        "symbol": symbol,
+        "side": side,
+        "positionSide": position_side,
+        "type": order_type,
+        "algoType": "CONDITIONAL",
+        "triggerPrice": stop_price,
+        "workingType": working_type,
+    }
+    if quantity is not None:
+        params["quantity"] = quantity
+
+    return api_post("/fapi/v1/algoOrder", params)
+
+
+def get_open_algo_orders(symbol: str = None) -> list:
+    """查询 Algo 条件单（止损/止盈），2025-11 后条件单走独立系统"""
+    params = {}
+    if symbol:
+        params["symbol"] = symbol
+    return api_get("/fapi/v1/openAlgoOrders", params=params, signed=True)
 
 
 def cancel_all_orders(symbol: str) -> list:
-    orders = get_open_orders(symbol)
+    """撤销所有挂单（普通单 + Algo 条件单）"""
     results = []
+    # 撤普通单
+    orders = get_open_orders(symbol)
     for o in orders:
         try:
             r = api_delete("/fapi/v1/order", {"symbol": symbol, "orderId": o["orderId"]})
             results.append(r)
         except Exception as e:
             log.warning(f"撤单失败 {symbol} orderId={o.get('orderId')}: {e}")
+    # 撤 Algo 条件单
+    try:
+        algo_orders = get_open_algo_orders(symbol)
+        for o in algo_orders:
+            try:
+                r = api_delete("/fapi/v1/algoOrder", {"symbol": symbol, "algoId": str(o["algoId"])})
+                results.append(r)
+            except Exception as e:
+                log.warning(f"撤 Algo 单失败 {symbol} algoId={o.get('algoId')}: {e}")
+    except Exception as e:
+        log.warning(f"查询 Algo 挂单失败 {symbol}: {e}")
     return results
 
 
@@ -463,8 +476,8 @@ def execute_plan(plan_path: str) -> dict:
             stop_price=round_price(symbol, stop_loss),
             quantity=quantity, position_side=pos_side)
         result["steps"].append({"step": "stop_loss", "status": "OK",
-                                "stop_price": stop_loss, "order_id": sl_order.get("orderId")})
-        log.info(f"止损单挂出 stopPrice={stop_loss} ✅")
+                                "stop_price": stop_loss, "algo_id": sl_order.get("algoId")})
+        log.info(f"止损单挂出 stopPrice={stop_loss} algoId={sl_order.get('algoId')} ✅")
     except Exception as e:
         result["steps"].append({"step": "stop_loss", "status": "ERROR", "msg": str(e)})
         log.error(f"挂止损失败（仓位已开，需手动处理！）: {e}")
@@ -481,8 +494,8 @@ def execute_plan(plan_path: str) -> dict:
                 stop_price=round_price(symbol, tp_price),
                 quantity=tp_qty, position_side=pos_side)
             tp_results.append({"tp": i + 1, "price": tp_price, "qty": tp_qty,
-                               "order_id": tp_order.get("orderId"), "status": "OK"})
-            log.info(f"止盈 TP{i + 1} 挂出 price={tp_price} qty={tp_qty} ✅")
+                               "algo_id": tp_order.get("algoId"), "status": "OK"})
+            log.info(f"止盈 TP{i + 1} 挂出 price={tp_price} qty={tp_qty} algoId={tp_order.get('algoId')} ✅")
         except Exception as e:
             tp_results.append({"tp": i + 1, "price": tp_price, "qty": tp_qty,
                                "status": "ERROR", "msg": str(e)})
@@ -530,14 +543,14 @@ def manage_position(symbol: str, plan: dict) -> dict:
         tp1_hit = (mark_price >= tp1_price) if direction == "long" else (mark_price <= tp1_price)
 
         if tp1_hit:
-            # 检查是否已经做过移保本（通过检查止损单是否还在原止损价）
-            open_orders = get_open_orders(symbol)
-            sl_orders = [o for o in open_orders if o.get("type") == "STOP_MARKET"
+            # 检查是否已经做过移保本（通过检查 Algo 止损单是否还在原止损价）
+            algo_orders = get_open_algo_orders(symbol)
+            sl_orders = [o for o in algo_orders if o.get("orderType") == "STOP_MARKET"
                          and o.get("side") == ("SELL" if direction == "long" else "BUY")]
 
             original_sl = plan.get("stop_loss")
             sl_at_original = any(
-                abs(float(o.get("stopPrice", 0)) - original_sl) < 0.0001 * original_sl
+                abs(float(o.get("triggerPrice", 0)) - original_sl) < 0.0001 * original_sl
                 for o in sl_orders
             )
 
@@ -557,10 +570,10 @@ def manage_position(symbol: str, plan: dict) -> dict:
                 except Exception as e:
                     result["actions"].append({"action": "tp1_reduce", "status": "ERROR", "msg": str(e)})
 
-                # 撤销旧止损
+                # 撤销旧止损（Algo 端点）
                 for o in sl_orders:
                     try:
-                        api_delete("/fapi/v1/order", {"symbol": symbol, "orderId": o["orderId"]})
+                        api_delete("/fapi/v1/algoOrder", {"symbol": symbol, "algoId": str(o["algoId"])})
                     except Exception:
                         pass
 
