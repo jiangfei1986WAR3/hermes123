@@ -793,6 +793,12 @@ def detect_position_changes() -> list:
                             os.remove(fpath)
                         except Exception:
                             pass
+            # 撤销该币种所有残留挂单（止损/止盈 Algo 单）
+            try:
+                cancel_all_orders(symbol)
+                log.info(f"已撤销 {symbol} 所有残留挂单")
+            except Exception as e:
+                log.warning(f"撤销 {symbol} 残留挂单失败: {e}")
 
         elif 0 < current_amount < prev_amount * 0.8:
             # ═══ 仓位明显减少（TP1 平半仓）═══
