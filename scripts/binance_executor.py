@@ -23,6 +23,7 @@ CONFIG_PATH = os.path.expanduser("~/.hermes/trading-config.json")
 PLANS_DIR   = os.path.expanduser("~/.hermes/trading-plans")
 EVENTS_DIR  = os.path.expanduser("~/.hermes/trading-events")
 HISTORY_DIR = os.path.expanduser("~/.hermes/trading-history")
+STATE_FILE  = os.path.expanduser("~/.hermes/trading-state.json")
 LOG_PATH    = os.path.expanduser("~/.hermes/trading-executor.log")
 
 BASE_URL    = "https://fapi.binance.com"
@@ -670,6 +671,159 @@ def manage_all_positions() -> list:
     return results
 
 
+# ─── 持仓变动检测（止损/止盈/平仓通知）─────────────────
+def _load_state() -> dict:
+    """读取上次保存的持仓快照"""
+    if os.path.exists(STATE_FILE):
+        try:
+            with open(STATE_FILE) as f:
+                return json.load(f)
+        except Exception:
+            pass
+    return {"positions": {}}
+
+
+def _save_state(positions: list) -> None:
+    """保存当前持仓快照"""
+    state = {}
+    for p in positions:
+        state[p["symbol"]] = {
+            "amount": p["amount"],
+            "entry_price": p["entry_price"],
+        }
+    with open(STATE_FILE, "w") as f:
+        json.dump({"positions": state}, f, ensure_ascii=False)
+
+
+def detect_position_changes() -> list:
+    """
+    对比上次持仓快照和当前持仓，检测仓位变动并生成通知。
+    独立函数，不修改任何现有逻辑。
+
+    检测场景：
+      - 仓位完全消失 → 止损/止盈/手动平仓
+      - 仓位数量减少 → TP1 平半仓
+    """
+    notifications = []
+    prev_state = _load_state()
+    prev_positions = prev_state.get("positions", {})
+
+    # 查当前持仓
+    try:
+        current_positions = get_positions()
+    except Exception as e:
+        log.warning(f"查询持仓失败，跳过变动检测: {e}")
+        return notifications
+
+    # 构建当前持仓字典
+    current_map = {}
+    for p in current_positions:
+        current_map[p["symbol"]] = p
+
+    # 对比：上次有，现在没了（或减少了）
+    for symbol, prev in prev_positions.items():
+        prev_amount = abs(prev.get("amount", 0))
+        prev_entry = prev.get("entry_price", 0)
+
+        if prev_amount == 0:
+            continue
+
+        current = current_map.get(symbol)
+        current_amount = abs(current["amount"]) if current else 0
+
+        if current_amount == 0 and prev_amount > 0:
+            # ═══ 仓位完全消失 ═══
+            # 判断平仓原因
+            try:
+                ticker = api_get("/fapi/v1/ticker/price", {"symbol": symbol})
+                current_price = float(ticker["price"])
+            except Exception:
+                current_price = 0
+
+            # 读计划文件获取止损/止盈价
+            plan_file = os.path.join(PLANS_DIR, f"{symbol}-plan.json")
+            stop_loss = None
+            tp1_price = None
+            direction = "long"  # 默认
+            if os.path.exists(plan_file):
+                try:
+                    with open(plan_file) as f:
+                        plan = json.load(f)
+                    stop_loss = plan.get("stop_loss")
+                    direction = plan.get("direction", "long")
+                    tps = plan.get("take_profits", [])
+                    if tps:
+                        tp1_price = tps[0].get("price")
+                except Exception:
+                    pass
+
+            # 计算盈亏
+            if direction == "long":
+                pnl = (current_price - prev_entry) * prev_amount
+            else:
+                pnl = (prev_entry - current_price) * prev_amount
+
+            # 判断平仓类型
+            if stop_loss and current_price <= stop_loss * 1.002:
+                close_type = "止损"
+                emoji = "🔴"
+            elif tp1_price and current_price >= tp1_price * 0.998:
+                close_type = "止盈"
+                emoji = "🟢"
+            else:
+                close_type = "平仓"
+                emoji = "⚪"
+
+            msg = (f"{emoji} {symbol} 已{close_type}\n"
+                   f"入场: {prev_entry} → 当前: {current_price}\n"
+                   f"盈亏: {pnl:+.2f}U")
+            notifications.append({"symbol": symbol, "type": close_type,
+                                  "pnl": round(pnl, 2), "message": msg})
+            log.info(f"持仓变动: {msg}")
+
+            # 清理：删除计划文件 + INVALIDATION 事件文件
+            if os.path.exists(plan_file):
+                os.remove(plan_file)
+                log.info(f"已清理计划文件: {plan_file}")
+            # 清理该币种的事件文件
+            if os.path.isdir(EVENTS_DIR):
+                for fname in os.listdir(EVENTS_DIR):
+                    if fname.startswith(symbol) and fname.endswith(".json"):
+                        fpath = os.path.join(EVENTS_DIR, fname)
+                        try:
+                            os.remove(fpath)
+                        except Exception:
+                            pass
+
+        elif 0 < current_amount < prev_amount * 0.8:
+            # ═══ 仓位明显减少（TP1 平半仓）═══
+            reduced_qty = prev_amount - current_amount
+            try:
+                ticker = api_get("/fapi/v1/ticker/price", {"symbol": symbol})
+                current_price = float(ticker["price"])
+            except Exception:
+                current_price = 0
+
+            direction = "long" if prev.get("amount", 0) > 0 else "short"
+            if direction == "long":
+                pnl = (current_price - prev_entry) * reduced_qty
+            else:
+                pnl = (prev_entry - current_price) * reduced_qty
+
+            msg = (f"🟡 {symbol} 部分止盈\n"
+                   f"已平: {reduced_qty} | 剩余: {current_amount}\n"
+                   f"入场: {prev_entry} → 当前: {current_price}\n"
+                   f"已实现盈亏: {pnl:+.2f}U")
+            notifications.append({"symbol": symbol, "type": "partial_tp",
+                                  "pnl": round(pnl, 2), "message": msg})
+            log.info(f"持仓变动: {msg}")
+
+    # 保存当前状态（供下次对比）
+    _save_state(current_positions)
+
+    return notifications
+
+
 # ─── CLI 入口 ──────────────────────────────────────────
 def main():
     import argparse
@@ -700,6 +854,9 @@ def main():
     p_close = sub.add_parser("close", help="市价平仓")
     p_close.add_argument("--symbol", required=True)
     p_close.add_argument("--percent", type=float, default=100, help="平仓百分比")
+
+    # 持仓变动检测
+    sub.add_parser("watch", help="检测持仓变动（止损/止盈/平仓通知）")
 
     args = parser.parse_args()
 
@@ -748,6 +905,13 @@ def main():
             r = place_order(args.symbol, side, "MARKET", quantity=qty,
                             position_side=pos_side)
             print(f"平仓 {qty} {args.symbol} orderId={r.get('orderId')}")
+
+    elif args.command == "watch":
+        notifications = detect_position_changes()
+        if notifications:
+            for n in notifications:
+                print(n["message"])
+        # 无变动时不输出（静默）
 
     else:
         parser.print_help()

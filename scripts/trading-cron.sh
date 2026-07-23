@@ -17,6 +17,12 @@ if [ "$MANAGE_RESULT" != "[]" ] && [ -n "$MANAGE_RESULT" ]; then
     OUTPUT="${OUTPUT}📊 持仓管理:\n$MANAGE_RESULT\n"
 fi
 
+# 3. 检测持仓变动（止损/止盈/平仓通知）
+WATCH_RESULT=$(python3 "$EXECUTOR" watch 2>&1 | grep -v '^\[' | grep -v 'INFO\|WARNING\|ERROR\|运行模式')
+if [ -n "$WATCH_RESULT" ]; then
+    OUTPUT="${OUTPUT}🔔 持仓变动:\n$WATCH_RESULT\n"
+fi
+
 # 只在有内容时输出（静默模式）
 if [ -n "$OUTPUT" ]; then
     echo -e "$OUTPUT"
