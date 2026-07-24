@@ -51,7 +51,7 @@ plan 文件 (~/.hermes/trading-plans/<SYMBOL>-plan.json)
 - 数量：`qty = (10 × leverage) / entry_price`，按币种精度取整
 - 最多同时 2 个持仓，逐仓模式
 
-不要使用 `plan_calculator.py` 的 0.5% 风险模型输出做展示。直接用上述公式计算数量。
+不要使用 `plan_calculator.py` 的 0.5% 风险模型输出做展示。仅数量计算直接用上述公式，trade-execution-planner 其余流程照常执行。
 
 ## Safety
 
