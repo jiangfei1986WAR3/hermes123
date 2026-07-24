@@ -642,6 +642,19 @@ def process_events() -> list:
                 results.append({"symbol": symbol, "action": "expired", "cleaned": True})
                 os.remove(fpath)
 
+            elif event_type == "INVALIDATION":
+                log.info(f"计划失效: {symbol}")
+                plan_file = os.path.join(PLANS_DIR, f"{symbol}-plan.json")
+                if os.path.exists(plan_file):
+                    os.remove(plan_file)
+                # 撤销该币种残留挂单（如有）
+                try:
+                    cancel_all_orders(symbol)
+                except Exception:
+                    pass
+                results.append({"symbol": symbol, "action": "invalidated", "cleaned": True})
+                os.remove(fpath)
+
         except Exception as e:
             log.error(f"处理事件 {fname} 失败: {e}")
             results.append({"file": fname, "error": str(e)})
