@@ -1,0 +1,13 @@
+{
+  "btc_margin": 10,
+  "btc_leverage": 20,
+  "default_margin": 10,
+  "default_leverage": 10,
+  "max_positions": 2,
+  "margin_mode": "isolated",
+  "plan_expiry_hours": 24,
+  "monitor_interval_seconds": 60,
+  "api_key": "YOUR_BINANCE_API_KEY_HERE",
+  "api_secret": "YOUR_BINANCE_API_SECRET_HERE",
+  "testnet": false
+}
