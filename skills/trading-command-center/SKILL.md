@@ -180,8 +180,9 @@ Use when a plan has concrete entry, stop, target, and risk fields.
 1. Confirm the plan contains entry, stop, targets, invalidation, and cancel condition.
 2. Generate plan JSON to `~/.hermes/trading-plans/<SYMBOL>-plan.json`.
 3. Create monitoring Cron (every 1m, no_agent=true, script mode).
-4. Verify script runs silent (no false trigger).
-5. 监控触发后由 binance_executor.py 自动执行，无需人工确认。
+4. 检查事件处理Cron（trading-cron.sh）是否在Cron列表中，不在则创建（every 2m, no_agent=true, deliver=all）。
+5. Verify script runs silent (no false trigger).
+6. 监控触发后由 binance_executor.py 自动执行，无需人工确认。
 
 ### TRIGGERED: Revalidate Before Execution
 
