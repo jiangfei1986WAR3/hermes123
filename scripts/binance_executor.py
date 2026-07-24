@@ -319,7 +319,7 @@ def cancel_all_orders(symbol: str) -> list:
 def execute_plan(plan_path: str) -> dict:
     """
     读取计划 JSON 文件，执行完整的开仓流程：
-    1. 检查是否有其他持仓（最多1个）
+    1. 检查是否有其他持仓（最多N个，由config的max_positions控制）
     2. 设置杠杆和逐仓模式
     3. 市价开仓
     4. 挂止损单

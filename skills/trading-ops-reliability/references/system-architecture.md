@@ -16,7 +16,7 @@ Price hits entry_trigger
   → Event Cron (≤2 min) finds event
   → binance_executor.py process-events:
       1. Load plan JSON
-      2. Check no conflicting position (max_positions=1)
+      2. Check no conflicting position (max_positions=2)
       3. Five data-sanity checks:
          ① Direction: entry > stop (long) or entry < stop (short)
          ② Market deviation: |current - entry| < 10%
@@ -57,7 +57,7 @@ Cron every 1m: eth-monitor-check.sh   → reads ETHUSDT-plan.json
 Cron every 2m: trading-cron.sh        → processes all events + manages all positions
 ```
 
-Only ONE position can be open at a time (max_positions=1 config). If BTC triggers first and opens, ETH trigger is rejected until BTC closes.
+Up to 2 positions can be open at a time (max_positions=2 config). If 2 positions are already open, a 3rd trigger is rejected until one closes.
 
 ## Key File Locations
 
