@@ -586,6 +586,48 @@ def manage_position(symbol: str, plan: dict) -> dict:
                 result["actions"].append({"action": "move_sl_to_breakeven",
                                           "new_sl": new_sl, "remaining_qty": remaining_qty, "status": "OK"})
                 log.info(f"止损移到保本 {new_sl}（剩余 {remaining_qty}）✅")
+
+                # ── 清理残留止盈单，按剩余仓位重新挂 ──
+                # TP1 已被币安执行后，剩余 TP 单的数量仍按原始仓位计算，
+                # 可能与实际持仓不匹配，需撤销后按剩余仓位重挂。
+                # 此步骤为 best-effort：失败只记日志，不影响已挂好的保本止损。
+                tp_orders = [o for o in algo_orders
+                             if o.get("orderType") == "TAKE_PROFIT_MARKET"
+                             and o.get("side") == exit_side]
+                if tp_orders:
+                    for o in tp_orders:
+                        try:
+                            api_delete("/fapi/v1/algoOrder",
+                                       {"symbol": symbol, "algoId": str(o["algoId"])})
+                        except Exception:
+                            pass
+                    # 未触发的 TP（TP2, TP3...），按剩余仓位比例重挂
+                    remaining_tps = take_profits[1:]
+                    if remaining_tps:
+                        total_pct = sum(tp.get("reduce_percent", 0) for tp in remaining_tps)
+                        allocated = 0.0
+                        for i, tp in enumerate(remaining_tps):
+                            if i == len(remaining_tps) - 1:
+                                # 最后一个 TP 吃掉舍入误差，确保总数量 = 剩余仓位
+                                tp_qty = round_qty(symbol, remaining_qty - allocated)
+                            else:
+                                pct = tp.get("reduce_percent", 0)
+                                raw = remaining_qty * pct / total_pct if total_pct > 0 else 0
+                                tp_qty = round_qty(symbol, raw)
+                                allocated += tp_qty
+                            if tp_qty <= 0:
+                                continue
+                            try:
+                                _place_conditional_order(
+                                    symbol, exit_side, "TAKE_PROFIT_MARKET",
+                                    stop_price=round_price(symbol, tp["price"]),
+                                    quantity=tp_qty, position_side=pos_side)
+                                log.info(f"重挂 TP{i + 2} price={tp['price']} qty={tp_qty} ✅")
+                            except Exception as e:
+                                log.warning(f"重挂 TP{i + 2} 失败: {e}")
+                    result["actions"].append({"action": "refresh_tp_orders",
+                                              "remaining_tps": len(remaining_tps), "status": "OK"})
+
             except Exception as e:
                 result["actions"].append({"action": "move_sl_to_breakeven", "status": "ERROR", "msg": str(e)})
         else:
