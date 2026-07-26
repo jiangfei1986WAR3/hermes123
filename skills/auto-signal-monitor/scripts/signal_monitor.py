@@ -176,6 +176,7 @@ def evaluate(plan):
                 "id": rule["id"],
                 "level": rule.get("level", "WATCH"),
                 "message": message,
+                "rule_type": rule_type,
             })
     return snapshots, events
 
@@ -268,9 +269,10 @@ def write_event_file(plan, event):
         return
     os.makedirs(EVENTS_DIR, exist_ok=True)
     symbol = plan["symbol"]
-    # Determine event type from rule
+    # Determine event type from rule's type field (not by guessing ID strings)
+    rule_type = event.get("rule_type", "")
     rule_id = event.get("id", "")
-    if "invalid" in rule_id or "break" in rule_id.lower():
+    if rule_type == "invalidation":
         event_type = "INVALIDATION"
     else:
         event_type = "TRIGGER"
