@@ -428,6 +428,24 @@ def execute_plan(plan_path: str) -> dict:
     result["steps"].append({"step": "safety_check", "status": "PASSED"})
     # ═══ 校验层结束 ═══
 
+    # ═══ 校验6: 入场偏差门（价格偏离触发价超过止损距离则放弃）═══
+    try:
+        _stop_dist = abs(entry_price - stop_loss)
+        _price_dev = abs(current_price - entry_price)
+        if _price_dev > _stop_dist:
+            msg = (f"入场偏差过大: 当前价 {current_price:.6g} 偏离触发价 {entry_price:.6g} "
+                   f"达 {_price_dev:.6g}，超过止损距离 {_stop_dist:.6g}，放弃入场")
+            log.warning(f"🚫 {msg}")
+            result["steps"].append({"step": "deviation_check", "status": "REJECTED", "msg": msg})
+            result["success"] = False
+            return result
+        log.info(f"✅ 入场偏差检查通过: 偏差 {_price_dev:.6g} ≤ 止损距离 {_stop_dist:.6g}")
+        result["steps"].append({"step": "deviation_check", "status": "PASSED"})
+    except NameError:
+        # current_price 未定义（校验2获取价格失败），跳过偏差门
+        log.warning("入场偏差门跳过（当前价格不可用）")
+    # ═══ 偏差门结束 ═══
+
     # 2. 设置杠杆
     try:
         set_leverage(symbol, leverage)
@@ -468,6 +486,30 @@ def execute_plan(plan_path: str) -> dict:
         result["steps"].append({"step": "open_position", "status": "ERROR", "msg": err_msg})
         log.error(f"开仓失败: {err_msg}")
         return result
+
+    # ═══ 校验7: 用实际成交价校验止损有效性（兜底）═══
+    actual_entry = float(order.get("avgPrice") or 0)
+    if actual_entry <= 0:
+        # avgPrice 不可用（币安市价单有时返回 null），查持仓获取入场价
+        try:
+            _positions = get_positions()
+            _pos = next((p for p in _positions if p["symbol"] == symbol), None)
+            if _pos:
+                actual_entry = _pos["entry_price"]
+                log.info(f"avgPrice 不可用，从持仓获取入场价: {actual_entry}")
+        except Exception:
+            pass
+    if actual_entry > 0:
+        original_sl_distance = abs(entry_price - stop_loss)
+        if direction == "long" and stop_loss >= actual_entry:
+            # 做多：止损应低于入场价，但当前止损 ≥ 实际成交价 → 无效
+            stop_loss = actual_entry - original_sl_distance
+            log.warning(f"⚠️ 止损调整: 实际成交 {actual_entry}，止损从原值调整到 {stop_loss:.6g}")
+        elif direction == "short" and stop_loss <= actual_entry:
+            # 做空：止损应高于入场价，但当前止损 ≤ 实际成交价 → 无效
+            stop_loss = actual_entry + original_sl_distance
+            log.warning(f"⚠️ 止损调整: 实际成交 {actual_entry}，止损从原值调整到 {stop_loss:.6g}")
+    # ═══ 止损校验结束 ═══
 
     # 5. 挂止损单
     try:
