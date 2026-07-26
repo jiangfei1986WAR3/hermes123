@@ -1,0 +1,75 @@
+{
+  "name": "AAVEUSDT long breakout",
+  "symbol": "AAVEUSDT",
+  "direction": "long",
+  "setup_type": "breakout_long",
+  "status": "PLAN_READY",
+  "created_at": "2026-07-26T21:50:00+08:00",
+  "expires_at": "2026-07-27T21:50:00+08:00",
+  "market_filter_symbols": ["BTCUSDT", "ETHUSDT"],
+  "intervals": ["15m", "1h", "4h"],
+  "cooldown_seconds": 600,
+  "alerts": {
+    "sound": "beep",
+    "speech": false,
+    "wav_path": null
+  },
+  "entry": {
+    "order_type": "STOP_MARKET",
+    "trigger_price": 96.80,
+    "limit_price": null
+  },
+  "stop_loss": 94.20,
+  "take_profits": [
+    {"price": 99.40, "reduce_percent": 50},
+    {"price": 102.00, "reduce_percent": 50}
+  ],
+  "risk": {
+    "margin_usdt": 10.0,
+    "leverage": 10,
+    "quantity": 1.03,
+    "stop_distance_pct": 2.69,
+    "rr_tp1": 1.0,
+    "rr_tp2": 2.0
+  },
+  "monitor": {
+    "trigger_condition": "15m close >= 96.80 AND vol_ratio >= 1.0",
+    "min_volume_ratio": 1.0,
+    "invalidation_condition": "15m close < 94.20",
+    "market_filter": "BTC/ETH not breaking key support",
+    "expires_after": "24h"
+  },
+  "rules": [
+    {
+      "id": "breakout_96_80",
+      "level": "ALERT",
+      "type": "breakout",
+      "side": "above",
+      "price": 96.80,
+      "timeframe": "15m",
+      "require_close": true,
+      "min_volume_ratio": 1.0,
+      "message": "AAVE 15m放量收盘突破96.80，突破做多触发"
+    },
+    {
+      "id": "invalidation_94_20",
+      "level": "ALERT",
+      "type": "invalidation",
+      "side": "below",
+      "price": 94.20,
+      "timeframe": "15m",
+      "require_close": false,
+      "message": "AAVE跌破94.20，反弹逻辑失效，取消计划"
+    },
+    {
+      "id": "market_filter_btc_eth",
+      "level": "WATCH",
+      "type": "market_filter",
+      "symbols": ["BTCUSDT", "ETHUSDT"],
+      "timeframes": ["15m", "1h"],
+      "weak_if_below_ma25": true,
+      "min_volume_ratio": 1.2,
+      "message": "BTC/ETH转弱，过滤多单入场"
+    }
+  ]
+}
