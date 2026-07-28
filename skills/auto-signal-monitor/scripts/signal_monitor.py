@@ -102,7 +102,10 @@ def rule_volume_ok(rule, data):
 
 def evaluate_breakout(rule, data):
     price = trigger_price(rule, data)
-    level = float(rule["price"])
+    raw_level = rule.get("price", rule.get("trigger_price"))
+    if raw_level is None or float(raw_level) <= 0:
+        raise KeyError(f"规则 {rule.get('id','?')} 的 price 无效（值={raw_level}），必须为正数")
+    level = float(raw_level)
     side = rule.get("side", "above")
     crossed = price >= level if side == "above" else price <= level
     if crossed and rule_volume_ok(rule, data):
@@ -161,6 +164,11 @@ def evaluate(plan):
     events = []
     for rule in plan.get("rules", []):
         rule_type = rule.get("type")
+        rule_level = rule.get("level", "WATCH")
+        if rule_level not in ("ALERT", "WATCH"):
+            print(f"{datetime.now(timezone.utc).isoformat()} WARNING 规则 {rule.get('id','?')} 的 level='{rule_level}' 非法（只认 ALERT/WATCH），已跳过",
+                  file=sys.stderr, flush=True)
+            continue
         if rule_type == "breakout":
             ok, message = evaluate_breakout(rule, primary)
         elif rule_type == "invalidation":
@@ -170,11 +178,13 @@ def evaluate(plan):
         elif rule_type == "market_filter":
             ok, message = evaluate_market_filter(rule, snapshots)
         else:
+            print(f"{datetime.now(timezone.utc).isoformat()} WARNING 未知规则类型 '{rule_type}' (id={rule.get('id','?')})，已跳过",
+                  file=sys.stderr, flush=True)
             ok, message = False, ""
         if ok:
             events.append({
                 "id": rule["id"],
-                "level": rule.get("level", "WATCH"),
+                "level": rule_level,
                 "message": message,
                 "rule_type": rule_type,
             })
