@@ -311,8 +311,14 @@ def run_once(plan, state_path):
     cooldown = int(plan.get("cooldown_seconds", 600))
     state = load_state(state_path)
     snapshots, events = evaluate(plan)
+    # ★ 市场过滤器：BTC/ETH转弱时拦截入场信号，但放行失效信号
+    market_filter_active = any(e.get("rule_type") == "market_filter" for e in events)
     emitted = []
     for event in events:
+        if market_filter_active and event.get("rule_type") in ("breakout", "pullback_reclaim"):
+            print(f"{datetime.now(timezone.utc).isoformat()} MARKET_FILTER_BLOCKED "
+                  f"{plan['symbol']} {event['rule_type']}: 大盘转弱，拦截入场信号", flush=True)
+            continue
         if should_emit(event, state, cooldown):
             emit_alert(plan, event)
             emitted.append(event)
@@ -328,6 +334,34 @@ def run_once(plan, state_path):
 
 def run_plan_path(plan_path):
     plan = load_plan(plan_path)
+    # ★ 过期检查：expires_at 过了就不再评估，写 PLAN_EXPIRED 让执行器清理
+    expires_at = plan.get("expires_at")
+    if expires_at:
+        try:
+            expiry = datetime.fromisoformat(expires_at)
+            now = datetime.now(timezone.utc)
+            # 兼容无时区的 expires_at（当作 UTC）
+            if expiry.tzinfo is None:
+                expiry = expiry.replace(tzinfo=timezone.utc)
+            if now >= expiry:
+                os.makedirs(EVENTS_DIR, exist_ok=True)
+                symbol = plan["symbol"]
+                event_data = {
+                    "type": "PLAN_EXPIRED",
+                    "symbol": symbol,
+                    "rule_id": "expiry",
+                    "message": f"{symbol} 计划已过期 ({expires_at})",
+                    "timestamp": now.isoformat(),
+                }
+                fname = f"{symbol}-PLAN_EXPIRED-{int(time.time())}.json"
+                fpath = os.path.join(EVENTS_DIR, fname)
+                Path(fpath).write_text(json.dumps(event_data, indent=2, ensure_ascii=False), encoding="utf-8")
+                print(f"EVENT_WRITTEN: {fpath}", flush=True)
+                print(f"{now.isoformat()} PLAN_EXPIRED {symbol}: 计划过期，已通知执行器清理", flush=True)
+                return
+        except (ValueError, TypeError) as exc:
+            print(f"{datetime.now(timezone.utc).isoformat()} WARNING 解析 expires_at 失败: {exc}",
+                  file=sys.stderr, flush=True)
     state_path = plan_path.with_suffix(".state.json")
     run_once(plan, state_path)
 

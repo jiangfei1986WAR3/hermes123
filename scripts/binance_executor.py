@@ -143,7 +143,7 @@ def round_qty(symbol: str, qty: float) -> float:
             decimals = len(step_str.rstrip("0").split(".")[-1])
         else:
             decimals = 0
-        result = math.floor(qty / step) * step
+        result = math.floor(qty / step + 1e-9) * step
         # 整数精度币种（如 ENA stepSize=1）必须返回 int，否则 Binance 拒 400
         if decimals == 0:
             return int(round(result))
@@ -290,8 +290,18 @@ def get_open_algo_orders(symbol: str = None) -> list:
     return api_get("/fapi/v1/openAlgoOrders", params=params, signed=True)
 
 
-def cancel_all_orders(symbol: str) -> list:
-    """撤销所有挂单（普通单 + Algo 条件单）"""
+def cancel_all_orders(symbol: str, force: bool = False) -> list:
+    """撤销所有挂单（普通单 + Algo 条件单）。
+    有持仓时默认拒绝执行，force=True 强制撤销。"""
+    if not force:
+        try:
+            positions = get_positions()
+            if any(p["symbol"] == symbol for p in positions):
+                log.warning(f"⚠️ {symbol} 有活跃持仓，拒绝撤单（force=True 可强制执行）")
+                return []
+        except Exception as e:
+            log.warning(f"⚠️ 查询持仓失败，保守拒绝撤单: {symbol} ({e})")
+            return []
     results = []
     # 撤普通单
     orders = get_open_orders(symbol)
@@ -487,7 +497,7 @@ def execute_plan(plan_path: str) -> dict:
         log.error(f"开仓失败: {err_msg}")
         return result
 
-    # ═══ 校验7: 用实际成交价校验止损有效性（兜底）═══
+    # ═══ 校验7: 滑点校准（按实际成交价等距平移止损止盈）═══
     actual_entry = float(order.get("avgPrice") or 0)
     if actual_entry <= 0:
         # avgPrice 不可用（币安市价单有时返回 null），查持仓获取入场价
@@ -500,16 +510,27 @@ def execute_plan(plan_path: str) -> dict:
         except Exception:
             pass
     if actual_entry > 0:
-        original_sl_distance = abs(entry_price - stop_loss)
-        if direction == "long" and stop_loss >= actual_entry:
-            # 做多：止损应低于入场价，但当前止损 ≥ 实际成交价 → 无效
-            stop_loss = actual_entry - original_sl_distance
-            log.warning(f"⚠️ 止损调整: 实际成交 {actual_entry}，止损从原值调整到 {stop_loss:.6g}")
-        elif direction == "short" and stop_loss <= actual_entry:
-            # 做空：止损应高于入场价，但当前止损 ≤ 实际成交价 → 无效
-            stop_loss = actual_entry + original_sl_distance
-            log.warning(f"⚠️ 止损调整: 实际成交 {actual_entry}，止损从原值调整到 {stop_loss:.6g}")
-    # ═══ 止损校验结束 ═══
+        delta = actual_entry - entry_price
+        if abs(delta) > 0:
+            # 等距平移：保持原计划的止损距离和R倍数不变
+            stop_loss = stop_loss + delta
+            for tp in take_profits:
+                tp["price"] = tp["price"] + delta
+            tp_str = '/'.join(f'{tp["price"]:.6g}' for tp in take_profits)
+            log.info(f"滑点校准: 计划价 {entry_price} → 实际 {actual_entry}，"
+                     f"平移 {delta:+.6g}，新止损 {stop_loss:.6g}，新TP {tp_str}")
+            # ★ 写回计划文件（manage_position/detect_position_changes 读它匹配Algo挂单）
+            try:
+                plan["stop_loss"] = stop_loss
+                plan["take_profits"] = take_profits
+                plan["actual_entry"] = actual_entry
+                plan["slippage"] = delta
+                with open(plan_path, "w") as f:
+                    json.dump(plan, f, indent=2, ensure_ascii=False)
+                log.info("校准后价格已写回计划文件")
+            except Exception as e:
+                log.warning(f"写回计划文件失败（不影响挂单）: {e}")
+    # ═══ 滑点校准结束 ═══
 
     # 5. 挂止损单
     try:
@@ -523,7 +544,20 @@ def execute_plan(plan_path: str) -> dict:
         log.info(f"止损单挂出 stopPrice={stop_loss} algoId={sl_order.get('algoId')} ✅")
     except Exception as e:
         result["steps"].append({"step": "stop_loss", "status": "ERROR", "msg": str(e)})
-        log.error(f"挂止损失败（仓位已开，需手动处理！）: {e}")
+        log.error(f"挂止损失败，立即平仓防止裸仓: {e}")
+        # ★ 保险买不上就退房：市价平掉刚开的仓，绝不留裸仓
+        try:
+            close_order = place_order(symbol, exit_side, "MARKET",
+                                      quantity=quantity, position_side=pos_side)
+            result["steps"].append({"step": "emergency_close", "status": "OK",
+                                    "order_id": close_order.get("orderId")})
+            log.info(f"止损挂失败 → 已紧急平仓 orderId={close_order.get('orderId')}")
+        except Exception as e2:
+            result["steps"].append({"step": "emergency_close", "status": "ERROR",
+                                    "msg": str(e2)})
+            log.error(f"紧急平仓也失败！{symbol} 可能裸仓，需立即手动处理！: {e2}")
+        result["success"] = False
+        return result
 
     # 6. 挂止盈单（分批）
     tp_results = []
@@ -545,7 +579,10 @@ def execute_plan(plan_path: str) -> dict:
             log.error(f"挂止盈 TP{i + 1} 失败: {e}")
 
     result["steps"].append({"step": "take_profits", "results": tp_results})
-    result["success"] = True
+    # ★ success 条件：止损必须挂上（止盈失败可容忍，还有止损兜着）
+    sl_ok = any(s.get("step") == "stop_loss" and s.get("status") == "OK"
+                for s in result["steps"])
+    result["success"] = sl_ok
     result["executed_at"] = datetime.now(timezone.utc).isoformat()
 
     # 7. 保存执行记录
@@ -729,14 +766,27 @@ def process_events() -> list:
             elif event_type == "INVALIDATION":
                 log.info(f"计划失效: {symbol}")
                 plan_file = os.path.join(PLANS_DIR, f"{symbol}-plan.json")
-                if os.path.exists(plan_file):
-                    os.remove(plan_file)
-                # 撤销该币种残留挂单（如有）
+                # ★ 有持仓时：不删计划文件（移保本/通知需要它），不撤单（止损止盈在保护仓位）
+                #   无持仓时：正常清理（删计划文件 + 撤残留入场挂单）
                 try:
-                    cancel_all_orders(symbol)
-                except Exception:
-                    pass
-                results.append({"symbol": symbol, "action": "invalidated", "cleaned": True})
+                    positions = get_positions()
+                    has_position = any(p["symbol"] == symbol for p in positions)
+                except Exception as e:
+                    log.warning(f"查询持仓失败，保守按有持仓处理: {symbol} ({e})")
+                    has_position = True
+
+                if has_position:
+                    log.info(f"{symbol} 有活跃持仓，INVALIDATION 仅记录，不删计划不撤单")
+                else:
+                    if os.path.exists(plan_file):
+                        os.remove(plan_file)
+                    try:
+                        cancel_all_orders(symbol)
+                    except Exception:
+                        pass
+                    log.info(f"{symbol} 无持仓，已清理计划文件和残留挂单")
+                results.append({"symbol": symbol, "action": "invalidated",
+                                "had_position": has_position})
                 os.remove(fpath)
 
         except Exception as e:
@@ -840,13 +890,13 @@ def detect_position_changes() -> list:
             plan_file = os.path.join(PLANS_DIR, f"{symbol}-plan.json")
             stop_loss = None
             tp1_price = None
-            direction = "long"  # 默认
+            # ★ 从持仓快照的带符号 amount 推断方向（正=多，负=空），不依赖计划文件
+            direction = "long" if prev.get("amount", 0) > 0 else "short"
             if os.path.exists(plan_file):
                 try:
                     with open(plan_file) as f:
                         plan = json.load(f)
                     stop_loss = plan.get("stop_loss")
-                    direction = plan.get("direction", "long")
                     tps = plan.get("take_profits", [])
                     if tps:
                         tp1_price = tps[0].get("price")
@@ -859,16 +909,29 @@ def detect_position_changes() -> list:
             else:
                 pnl = (prev_entry - current_price) * prev_amount
 
-            # 判断平仓类型
-            if stop_loss and current_price <= stop_loss * 1.002:
-                close_type = "止损"
-                emoji = "🔴"
-            elif tp1_price and current_price >= tp1_price * 0.998:
-                close_type = "止盈"
-                emoji = "🟢"
+            # 判断平仓类型（区分多空方向）
+            if direction == "long":
+                # 做多：止损在下方（价格跌破），止盈在上方（价格涨到）
+                if stop_loss and current_price <= stop_loss * 1.002:
+                    close_type = "止损"
+                    emoji = "🔴"
+                elif tp1_price and current_price >= tp1_price * 0.998:
+                    close_type = "止盈"
+                    emoji = "🟢"
+                else:
+                    close_type = "平仓"
+                    emoji = "⚪"
             else:
-                close_type = "平仓"
-                emoji = "⚪"
+                # 做空：止损在上方（价格涨破），止盈在下方（价格跌到）
+                if stop_loss and current_price >= stop_loss * 0.998:
+                    close_type = "止损"
+                    emoji = "🔴"
+                elif tp1_price and current_price <= tp1_price * 1.002:
+                    close_type = "止盈"
+                    emoji = "🟢"
+                else:
+                    close_type = "平仓"
+                    emoji = "⚪"
 
             msg = (f"{emoji} {symbol} 已{close_type}\n"
                    f"入场: {prev_entry} → 当前: {current_price}\n"
@@ -951,6 +1014,8 @@ def main():
     # 撤所有单
     p_cancel = sub.add_parser("cancel-all", help="撤销某交易对所有挂单")
     p_cancel.add_argument("--symbol", required=True)
+    p_cancel.add_argument("--force", action="store_true",
+                          help="有持仓时也强制撤单（危险，慎用）")
 
     # 紧急平仓
     p_close = sub.add_parser("close", help="市价平仓")
@@ -990,8 +1055,11 @@ def main():
             print("当前空仓")
 
     elif args.command == "cancel-all":
-        results = cancel_all_orders(args.symbol)
-        print(f"撤销 {len(results)} 个挂单")
+        results = cancel_all_orders(args.symbol, force=args.force)
+        if not results and not args.force:
+            print(f"⚠️ {args.symbol} 有持仓或查询失败，未撤单。加 --force 强制执行。")
+        else:
+            print(f"撤销 {len(results)} 个挂单")
 
     elif args.command == "close":
         positions = get_positions()
