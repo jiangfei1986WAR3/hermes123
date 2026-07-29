@@ -124,18 +124,23 @@ def evaluate_pullback_reclaim(rule, data):
     pullback_high = float(rule["pullback_high"])
     reclaim = float(rule["reclaim_price"])
     invalidation = float(rule["invalidation_price"])
+    side = rule.get("side", "above")
     touched_zone = candle["low20"] <= pullback_high and candle["high20"] >= pullback_low
-    not_invalidated = data["last"] > invalidation and candle["lastClosedLow"] > invalidation
-    reclaimed = data["last"] >= reclaim or candle["lastClosedClose"] >= reclaim
+    if side == "above":
+        not_invalidated = data["last"] > invalidation and candle["lastClosedLow"] > invalidation
+        reclaimed = data["last"] >= reclaim or candle["lastClosedClose"] >= reclaim
+    else:
+        not_invalidated = data["last"] < invalidation and candle["lastClosedHigh"] < invalidation
+        reclaimed = data["last"] <= reclaim or candle["lastClosedClose"] <= reclaim
     if touched_zone and not_invalidated and reclaimed and rule_volume_ok(rule, data):
         return True, f"{rule.get('message', rule['id'])}; last={data['last']:g}, reclaim={reclaim:g}"
     return False, ""
 
 
-def evaluate_market_filter(rule, snapshots):
+def evaluate_market_filter(rule, snapshots, direction="long"):
     symbols = rule.get("symbols", [])
     timeframes = rule.get("timeframes", ["15m", "1h"])
-    weak = []
+    adverse = []
     for symbol in symbols:
         data = snapshots.get(symbol)
         if not data:
@@ -144,13 +149,19 @@ def evaluate_market_filter(rule, snapshots):
             candle = data.get(timeframe)
             if not candle:
                 continue
-            below_ma = data["last"] < candle["ma25"] if rule.get("weak_if_below_ma25", True) else False
             vol_ok = candle["volRatio"] >= float(rule.get("min_volume_ratio", 0))
-            bearish = data["last"] < candle["open"]
-            if below_ma and vol_ok and bearish:
-                weak.append(f"{symbol} {timeframe}")
-    if weak:
-        return True, f"{rule.get('message', rule['id'])}: {', '.join(weak)}"
+            if direction == "short":
+                above_ma = data["last"] > candle["ma25"]
+                bullish = data["last"] > candle["open"]
+                if above_ma and vol_ok and bullish:
+                    adverse.append(f"{symbol} {timeframe}")
+            else:
+                below_ma = data["last"] < candle["ma25"]
+                bearish = data["last"] < candle["open"]
+                if below_ma and vol_ok and bearish:
+                    adverse.append(f"{symbol} {timeframe}")
+    if adverse:
+        return True, f"{rule.get('message', rule['id'])}: {', '.join(adverse)}"
     return False, ""
 
 
@@ -176,7 +187,7 @@ def evaluate(plan):
         elif rule_type == "pullback_reclaim":
             ok, message = evaluate_pullback_reclaim(rule, primary)
         elif rule_type == "market_filter":
-            ok, message = evaluate_market_filter(rule, snapshots)
+            ok, message = evaluate_market_filter(rule, snapshots, plan.get("direction", "long"))
         else:
             print(f"{datetime.now(timezone.utc).isoformat()} WARNING 未知规则类型 '{rule_type}' (id={rule.get('id','?')})，已跳过",
                   file=sys.stderr, flush=True)
@@ -327,7 +338,7 @@ def run_once(plan, state_path):
     for event in events:
         if market_filter_active and event.get("rule_type") in ("breakout", "pullback_reclaim"):
             print(f"{datetime.now(timezone.utc).isoformat()} MARKET_FILTER_BLOCKED "
-                  f"{plan['symbol']} {event['rule_type']}: 大盘转弱，拦截入场信号", flush=True)
+                  f"{plan['symbol']} {event['rule_type']}: 大盘{'转强' if plan.get('direction') == 'short' else '转弱'}，拦截入场信号", flush=True)
             continue
         if should_emit(event, state, cooldown):
             emit_alert(plan, event)

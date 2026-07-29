@@ -26,6 +26,7 @@
       "id": "pullback_reclaim",
       "level": "ALERT",
       "type": "pullback_reclaim",
+      "side": "above",
       "pullback_low": 2.96,
       "pullback_high": 2.97,
       "reclaim_price": 3.0,
@@ -50,9 +51,8 @@
       "type": "market_filter",
       "symbols": ["BTCUSDT", "ETHUSDT"],
       "timeframes": ["15m", "1h"],
-      "weak_if_below_ma25": true,
       "min_volume_ratio": 1.2,
-      "message": "BTC/ETH weakening; filter long entries"
+      "message": "BTC/ETH moving against plan direction; block entry"
     }
   ]
 }

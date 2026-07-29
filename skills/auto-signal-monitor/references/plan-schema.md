@@ -36,9 +36,9 @@ Use one JSON object per monitored setup.
 ## Rule Types
 
 - `breakout`: price crosses and, if `require_close` is true, candle close confirms the level.
-- `pullback_reclaim`: price previously touches a pullback zone, does not break invalidation, then reclaims a trigger level.
+- `pullback_reclaim`: price previously touches a pullback zone, does not break invalidation, then crosses the trigger level. Use `side: "above"` for long (reclaim upward) or `side: "below"` for short (reject downward). Default is `above`.
 - `invalidation`: price breaks a risk/protection level.
-- `market_filter`: BTC/ETH or other filter symbols weaken/strengthen enough to block a setup.
+- `market_filter`: BTC/ETH or other filter symbols move against the plan's direction enough to block entry. For long plans, blocks when filter symbols are weak; for short plans, blocks when filter symbols are strong. Direction is read from the plan's top-level `direction` field automatically.
 
 ## Common Rule Fields
 
@@ -57,6 +57,7 @@ Use one JSON object per monitored setup.
 ```json
 {
   "type": "pullback_reclaim",
+  "side": "above",
   "pullback_low": 2.96,
   "pullback_high": 2.97,
   "reclaim_price": 3.0,
@@ -66,6 +67,8 @@ Use one JSON object per monitored setup.
 }
 ```
 
+For short setups, use `"side": "below"` — the trigger fires when price is rejected from the pullback zone and breaks below `reclaim_price`; invalidation fires when price rises above `invalidation_price`.
+
 ## Market Filter Fields
 
 ```json
@@ -73,11 +76,12 @@ Use one JSON object per monitored setup.
   "type": "market_filter",
   "symbols": ["BTCUSDT", "ETHUSDT"],
   "timeframes": ["15m", "1h"],
-  "weak_if_below_ma25": true,
   "min_volume_ratio": 1.2,
-  "message": "BTC/ETH weakening; block long entry"
+  "message": "BTC/ETH moving against plan direction; block entry"
 }
 ```
+
+Direction is automatic: reads the plan's top-level `direction` field. Long plans are blocked when filter symbols are weak (below MA25 + bearish candle + volume). Short plans are blocked when filter symbols are strong (above MA25 + bullish candle + volume).
 
 ## Example UNI Plan
 
@@ -110,6 +114,7 @@ Use one JSON object per monitored setup.
       "id": "pullback_reclaim",
       "level": "ALERT",
       "type": "pullback_reclaim",
+      "side": "above",
       "pullback_low": 2.96,
       "pullback_high": 2.97,
       "reclaim_price": 3.0,
@@ -134,9 +139,8 @@ Use one JSON object per monitored setup.
       "type": "market_filter",
       "symbols": ["BTCUSDT", "ETHUSDT"],
       "timeframes": ["15m", "1h"],
-      "weak_if_below_ma25": true,
       "min_volume_ratio": 1.2,
-      "message": "BTC/ETH weakening; filter long entries"
+      "message": "BTC/ETH moving against plan direction; block entry"
     }
   ]
 }
