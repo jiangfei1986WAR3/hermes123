@@ -10,7 +10,7 @@ Execute trade plans on Binance USDT perpetual futures via REST API. This is the 
 ## Safety
 
 - Reads API keys from `~/.hermes/trading-config.json` (chmod 600).
-- Config controls: fixed margin (10U), leverage (BTC 20x / others 10x), max positions (2), isolated margin only.
+- Config controls: fixed margin (10U), leverage (BTC 20x / others 10x), max positions (6), isolated margin only.
 - API Key must have read + trade permissions. NEVER enable withdrawal permission.
 - Every order gets a stop-loss. No position is left unprotected.
 - Plans expire after 24 hours (configurable).

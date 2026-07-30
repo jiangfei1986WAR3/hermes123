@@ -49,7 +49,7 @@ plan 文件 (~/.hermes/trading-plans/<SYMBOL>-plan.json)
 - 保证金：10U 固定
 - 杠杆：BTC 20x，其他 10x
 - 数量：`qty = (10 × leverage) / entry_price`，按币种精度取整
-- 最多同时 2 个持仓，逐仓模式
+- 最多同时 6 个持仓，逐仓模式
 
 不要使用 `plan_calculator.py` 的 0.5% 风险模型输出做展示。仅数量计算直接用上述公式，trade-execution-planner 其余流程照常执行。
 
@@ -63,7 +63,7 @@ plan 文件 (~/.hermes/trading-plans/<SYMBOL>-plan.json)
 
 1. 查 `~/.hermes/trading-plans/` 现有计划文件（避免重复监控同一币种）
 2. 查 Cron 列表（避免重复创建监控）
-3. 查持仓数（最多2仓；持仓数≥2则不建计划；<2正常执行用户请求）
+3. 查持仓数（最多6仓；持仓数≥6则不建计划；<6正常执行用户请求）
 
 ## State Router
 
