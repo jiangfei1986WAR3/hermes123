@@ -59,6 +59,15 @@ plan 文件 (~/.hermes/trading-plans/<SYMBOL>-plan.json)
 - 执行由 binance_executor.py 的 5 重安全门控制，技能层不额外加"手动确认"拦截。
 - 如果用户请求绕过安全门或超出限额的操作，拒绝。
 
+## 验证拦截规则（建监控前必做）
+
+生成计划文件后、建 Cron 之前，先跑一次 `bash ~/.hermes/scripts/<symbol>-monitor-check.sh`。
+
+验证不静默时：
+- 回踩类（pullback/retest）→ 不建，删计划+事件，告知用户
+- 突破类（breakout/breakdown）→ 正常建（触发是预期行为）
+- 失效触发（invalidation）→ 不建，删计划+事件，告知用户
+
 ## 启动前检查（每次流程开头必做）
 
 1. 查 `~/.hermes/trading-plans/` 现有计划文件（避免重复监控同一币种）
@@ -91,8 +100,8 @@ If the state is unclear, infer from the message. Ask only when missing facts wou
 → 【必须】加载 trade-execution-planner 技能，仅对上述≤3个候选将分析结果转为执行计划（触发价/止损/TP/取消条件）
 → 固定保证金公式算数量
 → 生成 plan 文件（~/.hermes/trading-plans/）
-→ 建监控 Cron（每分钟）
-→ 验证脚本静默
+→ 验证：跑一次 monitor-check.sh（见"验证拦截规则"）
+→ 按验证拦截规则处理（静默→建Cron / 回踩失效→不建 / 突破→正常建）
 → 输出汇总表 + 每个候选的分析详情（数据时间/多周期状态/核心逻辑/警告/执行状态）
 ```
 
@@ -120,6 +129,7 @@ scan or symbol request
 -> trade-execution-planner
 -> 固定保证金公式算数量
 -> 生成 plan JSON 文件
+-> 验证（见"验证拦截规则"：回踩/失效→不建，突破→正常建）
 -> 创建监控 Cron（接入 signal_monitor + binance_executor 链路）
 -> 触发后自动执行（executor 5门控制）
 -> trade-review after exit
@@ -144,7 +154,7 @@ Use when the user has no position and asks what is worth watching.
    - strongest risk warning or avoid candidate
 5. For selected candidates, use `trading-analysis` to define trigger, protection line, and target zones.
 6. Use `trade-execution-planner` for any candidate that could become actionable.
-7. 直接生成 plan 文件 + 建监控 Cron，不问用户要不要。
+7. 直接生成 plan 文件，验证静默后建监控 Cron（见"验证拦截规则"），不问用户要不要。
 8. Output candidate status:
    - `WATCH_ONLY`: interesting but no concrete plan yet
    - `PLAN_READY`: plan file created, monitoring active
@@ -160,7 +170,7 @@ Use when the user has no position and asks what can be entered now.
 1. Use `binance-market-scanner` with `--executable-now`.
 2. Lead with `EXECUTABLE_NOW` candidates only.
 3. If none, say so clearly and list closest `WAIT_TRIGGER` or `MISSED_ENTRY`.
-4. For each candidate, directly generate plan file + monitoring Cron.
+4. For each candidate, generate plan file, verify silent, then create monitoring Cron（见"验证拦截规则"）.
 5. Do not stop to ask for confirmation.
 
 ### PLANNING: Validate One Candidate
@@ -170,7 +180,7 @@ Use when the user names a symbol, entry idea, planned stop, or asks whether a si
 1. Use `trading-analysis` for setup validity when levels are not already clear.
 2. Use `trade-execution-planner` to convert the idea into entry/stop/TP/cancel.
 3. Use 固定保证金公式 for quantity.
-4. If valid, generate plan file + monitoring Cron.
+4. If valid, generate plan file, verify silent, then create monitoring Cron（见"验证拦截规则"）.
 5. If any required field is missing, mark `WATCH_ONLY` or `NOT_EXECUTABLE` and state what is missing.
 
 ### PLAN_READY: Prepare Monitoring
@@ -179,9 +189,12 @@ Use when a plan has concrete entry, stop, target, and risk fields.
 
 1. Confirm the plan contains entry, stop, targets, invalidation, and cancel condition.
 2. Generate plan JSON to `~/.hermes/trading-plans/<SYMBOL>-plan.json`.
-3. Create monitoring Cron (every 1m, no_agent=true, script mode).
-4. 检查事件处理Cron（trading-cron.sh）是否在Cron列表中，不在则创建（every 2m, no_agent=true, deliver=all）。
-5. Verify script runs silent (no false trigger).
+3. Verify script runs silent（见"验证拦截规则"）：
+   - 静默 → 继续下一步
+   - 回踩/失效类不静默 → 删计划文件 + 删事件文件 → 终止，告知用户
+   - 突破类不静默 → 正常继续（触发是预期行为）
+4. Create monitoring Cron (every 1m, no_agent=true, script mode).
+5. 检查事件处理Cron（trading-cron.sh）是否在Cron列表中，不在则创建（every 2m, no_agent=true, deliver=all）。
 6. 监控触发后由 binance_executor.py 自动执行，无需人工确认。
 
 ### TRIGGERED: Revalidate Before Execution
@@ -216,7 +229,7 @@ Use when the position is closed or the user asks what went wrong/right.
 Use when the user wants live watching or repeated reminders.
 
 1. If no complete trade plan exists, use `trading-analysis` and `trade-execution-planner` first.
-2. Create plan file + monitoring Cron.
+2. Create plan file, verify silent, then create monitoring Cron（见"验证拦截规则"）.
 3. Use the deployment pattern from `auto-signal-monitor` skill (Cron script mode, not background process).
 4. Keep quiet when nothing triggers.
 
