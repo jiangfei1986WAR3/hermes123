@@ -61,7 +61,7 @@ plan 文件 (~/.hermes/trading-plans/<SYMBOL>-plan.json)
 
 ## 验证拦截规则（建监控前必做）
 
-生成计划文件后、建 Cron 之前，先跑一次 `bash ~/.hermes/scripts/<symbol>-monitor-check.sh`。
+生成计划文件后、建 Cron 之前，先跑一次 `python3 ~/.hermes/skills/auto-signal-monitor/scripts/signal_monitor.py --plan ~/.hermes/trading-plans/<SYMBOL>-plan.json --dry-run`（只评估不写事件文件）。
 
 验证不静默时：
 - 回踩类（pullback/retest）→ 不建，删计划+事件，告知用户

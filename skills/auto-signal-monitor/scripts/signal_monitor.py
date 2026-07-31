@@ -310,15 +310,16 @@ def write_event_file(plan, event):
     print(f"EVENT_WRITTEN: {fpath}", flush=True)
 
 
-def emit_alert(plan, event):
+def emit_alert(plan, event, dry_run=False):
     alerts = plan.get("alerts", {})
     message = f"{plan['symbol']} {event['level']}: {event['message']}. Decision support only; manually confirm execution."
     print(message, flush=True)
     # Write event file for executor (ALERT level only)
-    try:
-        write_event_file(plan, event)
-    except Exception as exc:
-        print(f"event_write_error: {exc}", file=sys.stderr, flush=True)
+    if not dry_run:
+        try:
+            write_event_file(plan, event)
+        except Exception as exc:
+            print(f"event_write_error: {exc}", file=sys.stderr, flush=True)
     if os.name == "nt":
         try:
             beep(alerts, event["level"])
@@ -328,7 +329,7 @@ def emit_alert(plan, event):
             print(f"sound_error: {exc}", file=sys.stderr, flush=True)
 
 
-def run_once(plan, state_path):
+def run_once(plan, state_path, dry_run=False):
     cooldown = int(plan.get("cooldown_seconds", 600))
     state = load_state(state_path)
     snapshots, events = evaluate(plan)
@@ -341,9 +342,10 @@ def run_once(plan, state_path):
                   f"{plan['symbol']} {event['rule_type']}: 大盘{'转强' if plan.get('direction') == 'short' else '转弱'}，拦截入场信号", flush=True)
             continue
         if should_emit(event, state, cooldown):
-            emit_alert(plan, event)
+            emit_alert(plan, event, dry_run=dry_run)
             emitted.append(event)
-    save_state(state_path, state)
+    if not dry_run:
+        save_state(state_path, state)
     if not emitted:
         primary = snapshots[plan["symbol"]]
         print(
@@ -353,7 +355,7 @@ def run_once(plan, state_path):
         )
 
 
-def run_plan_path(plan_path):
+def run_plan_path(plan_path, dry_run=False):
     plan = load_plan(plan_path)
     # ★ 过期检查：expires_at 过了就不再评估，写 PLAN_EXPIRED 让执行器清理
     expires_at = plan.get("expires_at")
@@ -365,26 +367,27 @@ def run_plan_path(plan_path):
             if expiry.tzinfo is None:
                 expiry = expiry.replace(tzinfo=timezone.utc)
             if now >= expiry:
-                os.makedirs(EVENTS_DIR, exist_ok=True)
-                symbol = plan["symbol"]
-                event_data = {
-                    "type": "PLAN_EXPIRED",
-                    "symbol": symbol,
-                    "rule_id": "expiry",
-                    "message": f"{symbol} 计划已过期 ({expires_at})",
-                    "timestamp": now.isoformat(),
-                }
-                fname = f"{symbol}-PLAN_EXPIRED-{int(time.time())}.json"
-                fpath = os.path.join(EVENTS_DIR, fname)
-                Path(fpath).write_text(json.dumps(event_data, indent=2, ensure_ascii=False), encoding="utf-8")
-                print(f"EVENT_WRITTEN: {fpath}", flush=True)
-                print(f"{now.isoformat()} PLAN_EXPIRED {symbol}: 计划过期，已通知执行器清理", flush=True)
+                if not dry_run:
+                    os.makedirs(EVENTS_DIR, exist_ok=True)
+                    symbol = plan["symbol"]
+                    event_data = {
+                        "type": "PLAN_EXPIRED",
+                        "symbol": symbol,
+                        "rule_id": "expiry",
+                        "message": f"{symbol} 计划已过期 ({expires_at})",
+                        "timestamp": now.isoformat(),
+                    }
+                    fname = f"{symbol}-PLAN_EXPIRED-{int(time.time())}.json"
+                    fpath = os.path.join(EVENTS_DIR, fname)
+                    Path(fpath).write_text(json.dumps(event_data, indent=2, ensure_ascii=False), encoding="utf-8")
+                    print(f"EVENT_WRITTEN: {fpath}", flush=True)
+                print(f"{now.isoformat()} PLAN_EXPIRED {plan['symbol']}: 计划过期，已通知执行器清理", flush=True)
                 return
         except (ValueError, TypeError) as exc:
             print(f"{datetime.now(timezone.utc).isoformat()} WARNING 解析 expires_at 失败: {exc}",
                   file=sys.stderr, flush=True)
     state_path = plan_path.with_suffix(".state.json")
-    run_once(plan, state_path)
+    run_once(plan, state_path, dry_run=dry_run)
 
 
 def run_directory_once(plans_dir):
@@ -407,6 +410,7 @@ def main():
     parser.add_argument("--once", action="store_true", help="Run one check and exit.")
     parser.add_argument("--loop", action="store_true", help="Run repeatedly.")
     parser.add_argument("--interval-seconds", type=int, default=60, help="Loop interval.")
+    parser.add_argument("--dry-run", action="store_true", help="Evaluate only, do not write event files or state.")
     args = parser.parse_args()
 
     if not args.once and not args.loop:
@@ -415,7 +419,7 @@ def main():
     while True:
         try:
             if args.plan:
-                run_plan_path(Path(args.plan))
+                run_plan_path(Path(args.plan), dry_run=args.dry_run)
             else:
                 run_directory_once(args.plans_dir)
         except Exception as exc:
