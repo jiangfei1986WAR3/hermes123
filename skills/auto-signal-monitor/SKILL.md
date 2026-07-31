@@ -81,6 +81,8 @@ cronjob action=create name="<SYMBOL> 价格监控" schedule="every 1m"
 
 4. 验证：`bash ~/.hermes/scripts/<symbol>-monitor-check.sh`，未触发时应无输出（静默）
 
+⚠️ 必须严格复制上面的模板，禁止简写成一行管道（grep无匹配exit 1→Cron误判错误→刷垃圾通知）。
+
 **Cron 由守护进程管理，不依赖任何会话，关网页/断微信都不影响。**
 
 ## Script Usage（单次检查 / 调试用）
