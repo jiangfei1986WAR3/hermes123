@@ -34,32 +34,32 @@ Use this skill to batch scan Binance U-margined perpetual markets and persist re
 
 Default quality scan:
 
-```powershell
+```bash
 python3 "~/.hermes/skills/binance-market-scanner/scripts/scan_binance_usdt_perps.py" --progress --timeout 45 --retries 3
 ```
 
 Useful options:
 
-```powershell
-python3 "~/.hermes/skills/binance-market-scanner/scripts/scan_binance_usdt_perps.py" --min-quote-volume 50000000 --limit 100 --progress --timeout 45 --retries 3 --out-dir "/root/Documents/trae_projects/zhuandaqian/market-scans"
+```bash
+python3 "~/.hermes/skills/binance-market-scanner/scripts/scan_binance_usdt_perps.py" --min-quote-volume 30000000 --limit 100 --progress --timeout 45 --retries 3 --out-dir "/root/Documents/trae_projects/zhuandaqian/market-scans"
 ```
 
 Deep quality scan:
 
-```powershell
+```bash
 python3 "~/.hermes/skills/binance-market-scanner/scripts/scan_binance_usdt_perps.py" --min-quote-volume 30000000 --limit 100 --progress --timeout 45 --retries 3 --out-dir "/root/Documents/trae_projects/zhuandaqian/market-scans"
 ```
 
 Fast scan, only when the user asks for speed:
 
-```powershell
-python3 "~/.hermes/skills/binance-market-scanner/scripts/scan_binance_usdt_perps.py" --min-quote-volume 50000000 --limit 40 --progress --timeout 15 --retries 1 --out-dir "/root/Documents/trae_projects/zhuandaqian/market-scans"
+```bash
+python3 "~/.hermes/skills/binance-market-scanner/scripts/scan_binance_usdt_perps.py" --min-quote-volume 30000000 --limit 40 --progress --timeout 15 --retries 1 --out-dir "/root/Documents/trae_projects/zhuandaqian/market-scans"
 ```
 
 Strict immediate-execution scan, only when the user asks for current tradable candidates:
 
-```powershell
-python3 "~/.hermes/skills/binance-market-scanner/scripts/scan_binance_usdt_perps.py" --min-quote-volume 50000000 --limit 100 --progress --timeout 45 --retries 3 --executable-now --max-stop-pct 3 --min-rr 1.5 --out-dir "/root/Documents/trae_projects/zhuandaqian/market-scans"
+```bash
+python3 "~/.hermes/skills/binance-market-scanner/scripts/scan_binance_usdt_perps.py" --min-quote-volume 30000000 --limit 100 --progress --timeout 45 --retries 3 --executable-now --max-stop-pct 3 --min-rr 1.5 --out-dir "/root/Documents/trae_projects/zhuandaqian/market-scans"
 ```
 
 The script writes:
@@ -77,6 +77,8 @@ Default interpretation:
 - `LONG_WATCH`: structure is constructive but not confirmed.
 - `SHORT_TRIGGER_OR_CLOSE`: possible short trigger or near-trigger; still requires manual confirmation.
 - `SHORT_WATCH`: structure is weak but not confirmed.
+- `AMBIGUOUS`: both long and short scores are high (>= 46) with a small gap (<= 8) — conflicting signals, do not enter.
+- `INSUFFICIENT_DATA`: one or more timeframes lack enough closed bars for reliable indicators.
 - `NEUTRAL`: no actionable setup.
 
 When `--executable-now` is enabled, keep the base labels above and add a separate execution layer:

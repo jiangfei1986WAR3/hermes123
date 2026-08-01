@@ -4,11 +4,13 @@
 from __future__ import annotations
 
 import argparse
+import concurrent.futures
 import csv
 import json
 import math
 import sys
 import time
+import urllib.error
 import urllib.parse
 import urllib.request
 from dataclasses import dataclass
@@ -18,7 +20,7 @@ from typing import Any
 
 
 BASE_URL = "https://fapi.binance.com"
-DEFAULT_OUT_DIR = r"D:\Projects\codex1\market-scans"
+DEFAULT_OUT_DIR = "/root/Documents/trae_projects/zhuandaqian/market-scans"
 
 
 def api_get(
@@ -61,6 +63,7 @@ def round_float(value: float, digits: int = 8) -> float:
 @dataclass
 class KlineRow:
     open_time: int
+    close_time: int
     open: float
     high: float
     low: float
@@ -70,10 +73,11 @@ class KlineRow:
     taker_buy_quote: float
 
 
-def parse_klines(raw: list[list[Any]]) -> list[KlineRow]:
-    return [
+def parse_klines(raw: list[list[Any]], drop_unclosed: bool = True) -> list[KlineRow]:
+    rows = [
         KlineRow(
             open_time=int(row[0]),
+            close_time=int(row[6]),
             open=float(row[1]),
             high=float(row[2]),
             low=float(row[3]),
@@ -84,10 +88,20 @@ def parse_klines(raw: list[list[Any]]) -> list[KlineRow]:
         )
         for row in raw
     ]
+    # Binance klines 最后一根永远是进行中的未收盘K线，其成交量/高低都是不完整数据。
+    # 剔除后所有指标基于已收盘K线计算，消除扫描时刻对 volRatio 等指标的系统性污染。
+    if drop_unclosed and rows and rows[-1].close_time >= int(time.time() * 1000):
+        rows = rows[:-1]
+    return rows
 
 
-def timeframe_stats(raw: list[list[Any]]) -> dict[str, float]:
+def timeframe_stats(raw: list[list[Any]]) -> dict[str, Any]:
     rows = parse_klines(raw)
+    bars = len(rows)
+    # 数据不足时静默降级是严重隐患：MA99 变 MA30、prev20 变 prev4，新币极易被误判突破。
+    # 100 根是 MA99 的最低要求（99根均线+1根当前），不足则标记 insufficient 由调用方跳过。
+    if bars < 100:
+        return {"dataQuality": "insufficient", "bars": bars}
     last = rows[-1]
     prev20 = rows[-21:-1]
     last20 = rows[-20:]
@@ -114,6 +128,8 @@ def timeframe_stats(raw: list[list[Any]]) -> dict[str, float]:
         )
     atr = avg(true_ranges)
     return {
+        "dataQuality": "ok",
+        "bars": bars,
         "close": round_float(last.close),
         "high": round_float(last.high),
         "low": round_float(last.low),
@@ -170,8 +186,11 @@ def score_long(item: dict[str, Any]) -> dict[str, Any]:
         score += 8
         reasons.append("1H接近区间上沿且量能不弱")
 
+    # P2-9 注：突破(volRatio>=1.3)与回踩(volRatio<=0.9)由 volRatio 阈值保证互斥，
+    # 不可能同时命中。若未来调整阈值须重新验证此约束。
     near_h1_ma25 = abs((h1["close"] - h1["ma25"]) / max(h1["close"], 1e-12)) <= 0.012
-    if near_h1_ma25 and h1["volRatio"] <= 0.9 and h4["close"] > h4["ma25"]:
+    # 下限 0.5 防止零成交量/极低流动性被误判为"缩量"（P0-3 修复）
+    if near_h1_ma25 and 0.5 <= h1["volRatio"] <= 0.9 and h4["close"] > h4["ma25"]:
         score += 14
         reasons.append("接近1H MA25缩量回踩")
 
@@ -246,38 +265,64 @@ def score_short(item: dict[str, Any]) -> dict[str, Any]:
     return {"score": min(score, 100), "reasons": reasons, "warnings": warnings}
 
 
-def classify(long_score: int, short_score: int) -> str:
-    if long_score >= 70:
-        return "LONG_TRIGGER_OR_CLOSE"
-    if long_score >= 58:
-        return "LONG_WATCH"
-    if short_score >= 70:
-        return "SHORT_TRIGGER_OR_CLOSE"
-    if short_score >= 58:
-        return "SHORT_WATCH"
+def classify(long_score: int, short_score: int, ambiguous_gap: int = 8) -> str:
+    # 多空拉锯：双方都强且差距小，不该进场（P1-5 修复：消除先判long的顺序偏置）
+    if (
+        abs(long_score - short_score) <= ambiguous_gap
+        and max(long_score, short_score) >= 46
+    ):
+        return "AMBIGUOUS"
+    if long_score > short_score:
+        if long_score >= 60:
+            return "LONG_TRIGGER_OR_CLOSE"
+        if long_score >= 46:
+            return "LONG_WATCH"
+    else:
+        if short_score >= 60:
+            return "SHORT_TRIGGER_OR_CLOSE"
+        if short_score >= 46:
+            return "SHORT_WATCH"
     return "NEUTRAL"
 
 
 def build_market_filter(results: list[dict[str, Any]]) -> dict[str, Any]:
     majors = {item["symbol"]: item for item in results if item["symbol"] in {"BTCUSDT", "ETHUSDT"}}
+    # P1-6 修复：主流币缺失时保守封锁，不静默放行
+    missing = [s for s in ("BTCUSDT", "ETHUSDT") if s not in majors]
+    if missing:
+        return {
+            "longOk": False,
+            "shortOk": False,
+            "strength": None,
+            "notes": [f"主流币数据缺失，保守封锁: {', '.join(missing)}"],
+        }
     weak = 0
     strong = 0
     notes: list[str] = []
     for symbol in ("BTCUSDT", "ETHUSDT"):
-        item = majors.get(symbol)
-        if not item:
-            continue
+        item = majors[symbol]
         h1 = item["1h"]
         h4 = item["4h"]
+        # 数据不足的主流币与缺失同等对待：保守封锁（P1-6 补修）
+        if h1.get("dataQuality") != "ok" or h4.get("dataQuality") != "ok":
+            return {
+                "longOk": False,
+                "shortOk": False,
+                "strength": None,
+                "notes": [f"{symbol} 数据不足，保守封锁"],
+            }
         if h1["close"] < h1["ma25"] and h4["close"] < h4["ma25"]:
             weak += 1
             notes.append(f"{symbol} weak below 1h/4h MA25")
         if h1["close"] > h1["ma25"] and h4["close"] > h4["ma25"]:
             strong += 1
             notes.append(f"{symbol} strong above 1h/4h MA25")
+    # strength: -1.0(全弱) ~ +1.0(全强)，连续值供后续加权使用
+    strength = (strong - weak) / 2.0
     return {
         "longOk": weak < 2,
         "shortOk": strong < 2,
+        "strength": round_float(strength, 2),
         "notes": notes or ["BTC/ETH filter neutral"],
     }
 
@@ -321,6 +366,9 @@ def evaluate_executable_now(
     min_rr: float,
 ) -> dict[str, Any]:
     state = item["state"]
+    # INSUFFICIENT_DATA 标的无法评估执行，直接返回
+    if state == "INSUFFICIENT_DATA":
+        return empty_execution("NOT_EXECUTABLE", "insufficient data for execution evaluation")
     current = float(item.get("mark") or item.get("last") or 0)
     h1 = item["1h"]
     m15 = item["15m"]
@@ -428,6 +476,30 @@ def evaluate_executable_now(
 def build_flat_row(item: dict[str, Any]) -> dict[str, Any]:
     long = item["long"]
     short = item["short"]
+    # INSUFFICIENT_DATA 标的：时间周期字段不完整，只输出基础字段，指标填 None
+    if item["state"] == "INSUFFICIENT_DATA":
+        return {
+            "symbol": item["symbol"],
+            "state": item["state"],
+            "longScore": long["score"],
+            "shortScore": short["score"],
+            "last": item["last"],
+            "mark": item["mark"],
+            "changePct": item["changePct"],
+            "quoteVolume": item["quoteVolume"],
+            "funding": item["funding"],
+            "oi": item["oi"],
+            "m15Close": None, "m15MA7": None, "m15MA25": None,
+            "m15VolRatio": None, "m15BuyRatio": None,
+            "h1Close": None, "h1MA7": None, "h1MA25": None,
+            "h1High20": None, "h1Low20": None, "h1VolRatio": None, "h1RangePos": None,
+            "h4Close": None, "h4MA7": None, "h4MA25": None,
+            "dClose": None, "dMA7": None, "dMA25": None,
+            "longReasons": "",
+            "longWarnings": "；".join(long["warnings"]),
+            "shortReasons": "",
+            "shortWarnings": "；".join(short["warnings"]),
+        }
     row = {
         "symbol": item["symbol"],
         "state": item["state"],
@@ -521,51 +593,98 @@ def scan(args: argparse.Namespace) -> dict[str, Any]:
         f"(minQuoteVolume={args.min_quote_volume:g}, limit={args.limit or 'all'})...",
     )
 
+    # P2-11: premiumIndex 不带 symbol 一次返回全部，N次请求→1次
+    progress(args, "Fetching premium index for all symbols...")
+    all_premium = api_get("/fapi/v1/premiumIndex", timeout=args.timeout, retries=args.retries)
+    premium_map = {p["symbol"]: p for p in all_premium}
+
     results: list[dict[str, Any]] = []
     errors: list[dict[str, str]] = []
+    insufficient_count = 0
+
+    def fetch_symbol(base: dict[str, Any]) -> dict[str, Any]:
+        """获取单个标的的 OI + 4 个周期 K线（并发执行）。"""
+        symbol = base["symbol"]
+        premium = premium_map.get(symbol)
+        if not premium:
+            raise ValueError(f"premiumIndex 中无 {symbol}")
+
+        # OI + 4个klines 并发
+        intervals = ("15m", "1h", "4h", "1d")
+        with concurrent.futures.ThreadPoolExecutor(max_workers=5) as pool:
+            oi_future = pool.submit(
+                api_get, "/fapi/v1/openInterest",
+                {"symbol": symbol}, timeout=args.timeout, retries=args.retries,
+            )
+            kline_futures = {
+                iv: pool.submit(
+                    api_get, "/fapi/v1/klines",
+                    {"symbol": symbol, "interval": iv, "limit": 121},
+                    timeout=args.timeout, retries=args.retries,
+                )
+                for iv in intervals
+            }
+            oi = oi_future.result()
+            klines_raw = {iv: kline_futures[iv].result() for iv in intervals}
+
+        item: dict[str, Any] = {
+            "symbol": symbol,
+            "last": base["last"],
+            "mark": float(premium["markPrice"]),
+            "changePct": round_float(base["changePct"], 2),
+            "quoteVolume": round_float(base["quoteVolume"], 2),
+            "funding": float(premium["lastFundingRate"]),
+            "oi": float(oi["openInterest"]),
+            "fetchedAt": datetime.now().isoformat(timespec="seconds"),
+        }
+        for iv in intervals:
+            item[iv] = timeframe_stats(klines_raw[iv])
+        return item
+
     for index, base in enumerate(universe, start=1):
         symbol = base["symbol"]
         try:
-            premium = api_get(
-                "/fapi/v1/premiumIndex",
-                {"symbol": symbol},
-                timeout=args.timeout,
-                retries=args.retries,
-            )
-            oi = api_get(
-                "/fapi/v1/openInterest",
-                {"symbol": symbol},
-                timeout=args.timeout,
-                retries=args.retries,
-            )
-            item: dict[str, Any] = {
-                "symbol": symbol,
-                "last": base["last"],
-                "mark": float(premium["markPrice"]),
-                "changePct": round_float(base["changePct"], 2),
-                "quoteVolume": round_float(base["quoteVolume"], 2),
-                "funding": float(premium["lastFundingRate"]),
-                "oi": float(oi["openInterest"]),
-            }
-            for interval in ("15m", "1h", "4h", "1d"):
-                raw = api_get(
-                    "/fapi/v1/klines",
-                    {"symbol": symbol, "interval": interval, "limit": 120},
-                    timeout=args.timeout,
-                    retries=args.retries,
-                )
-                item[interval] = timeframe_stats(raw)
-            item["long"] = score_long(item)
-            item["short"] = score_short(item)
-            item["state"] = classify(item["long"]["score"], item["short"]["score"])
+            item = fetch_symbol(base)
+            # 任一时间周期数据不足则跳过评分，避免 MA99 变 MA30 等静默失真
+            insufficient_tfs = [
+                tf for tf in ("15m", "1h", "4h", "1d")
+                if item[tf].get("dataQuality") == "insufficient"
+            ]
+            if insufficient_tfs:
+                item["long"] = {"score": 0, "reasons": [], "warnings": [f"数据不足: {','.join(insufficient_tfs)}"]}
+                item["short"] = {"score": 0, "reasons": [], "warnings": [f"数据不足: {','.join(insufficient_tfs)}"]}
+                item["state"] = "INSUFFICIENT_DATA"
+                insufficient_count += 1
+            else:
+                item["long"] = score_long(item)
+                item["short"] = score_short(item)
+                item["state"] = classify(item["long"]["score"], item["short"]["score"])
             results.append(item)
             if args.verbose or args.progress:
                 print(f"{index}/{len(universe)} {symbol} {item['state']} L={item['long']['score']} S={item['short']['score']}")
             time.sleep(args.sleep)
-        except Exception as exc:  # noqa: BLE001 - keep scanning other symbols.
-            errors.append({"symbol": symbol, "error": str(exc)})
+        except (urllib.error.URLError, OSError, TimeoutError) as exc:
+            # 网络类错误：可重试，记录后继续
+            errors.append({"symbol": symbol, "error": str(exc), "type": "network"})
             if args.verbose or args.progress:
-                print(f"warn: {symbol}: {exc}")
+                print(f"warn [network]: {symbol}: {exc}")
+        except (KeyError, ValueError, IndexError) as exc:
+            # 数据结构错误：API 返回格式异常，应告警
+            errors.append({"symbol": symbol, "error": str(exc), "type": "data"})
+            print(f"⚠️ 数据结构异常: {symbol}: {exc}", file=sys.stderr, flush=True)
+        except Exception as exc:  # noqa: BLE001 - keep scanning other symbols.
+            errors.append({"symbol": symbol, "error": str(exc), "type": "unknown"})
+            if args.verbose or args.progress:
+                print(f"warn [unknown]: {symbol}: {exc}")
+
+    # P3-14: 错误率超过 universe 的 10% 时显式警告
+    if universe and len(errors) / len(universe) > 0.10:
+        print(
+            f"⚠️ 错误率过高: {len(errors)}/{len(universe)} "
+            f"({len(errors)/len(universe)*100:.1f}%) 个标的获取失败",
+            file=sys.stderr,
+            flush=True,
+        )
 
     market_filter = build_market_filter(results)
     if args.executable_now:
@@ -603,6 +722,7 @@ def scan(args: argparse.Namespace) -> dict[str, Any]:
         "universe": len(universe),
         "scanned": len(results),
         "errors": len(errors),
+        "insufficientData": insufficient_count,
     }
     if args.executable_now:
         filter_meta.update(
@@ -630,83 +750,52 @@ def scan(args: argparse.Namespace) -> dict[str, Any]:
     return payload
 
 
-def generate_report(payload: dict[str, Any], top_n: int = 3) -> str:
-    """Generate a formatted Chinese report from scan results."""
-    lines = []
-    counts = payload.get("counts", {})
-    mf = payload.get("marketFilter", {})
-    rows = payload.get("summaryRows", [])
+def compute_stability(payload: dict[str, Any], out_dir: Path) -> dict[str, Any] | None:
+    """与上一份扫描对比候选名单 Jaccard 相似度，检测名单跳变（P1-7）。"""
+    prev_files = sorted(out_dir.glob("*-scan.json"), key=lambda p: p.stat().st_mtime)
+    if not prev_files:
+        return None
+    try:
+        with prev_files[-1].open(encoding="utf-8") as fh:
+            prev = json.load(fh)
+    except (json.JSONDecodeError, OSError):
+        return None
 
-    lines.append("=" * 50)
-    lines.append("📊 币安 USDT 永续合约扫描报告")
-    lines.append("=" * 50)
-    lines.append(f"扫描时间: {payload.get('generatedAt', 'N/A')}")
-    lines.append(f"交易对数量: {counts.get('scanned', '?')}")
-    lines.append(f"大盘过滤器: 做多{'✅' if mf.get('longOk') else '❌'} | 做空{'✅' if mf.get('shortOk') else '❌'}")
-    if mf.get("notes"):
-        lines.append(f"  备注: {'; '.join(mf['notes'])}")
-    lines.append("")
+    def watchset(data: dict[str, Any]) -> set[str]:
+        return {
+            r["symbol"]
+            for r in data.get("results", [])
+            if r.get("state", "").startswith(("LONG", "SHORT"))
+        }
 
-    # EXECUTABLE_NOW
-    exec_now = payload.get("executableNow", [])
-    if exec_now:
-        lines.append(f"🔥 EXECUTABLE_NOW（可直接进场）: {len(exec_now)} 个")
-        lines.append("-" * 50)
-        for item in exec_now:
-            long = item["long"]
-            short = item["short"]
-            execution = item.get("execution", {})
-            side = execution.get("side", "")
-            score = long["score"] if side == "long" else short["score"]
-            lines.append(f"  {item['symbol']} [{side.upper()}] 分数:{score}")
-            lines.append(f"    当前价: {item.get('last', 'N/A')}")
-            lines.append(f"    入场区间: {execution.get('entryLow', '?')} ~ {execution.get('entryHigh', '?')}")
-            lines.append(f"    止损: {execution.get('protection', '?')}")
-            lines.append(f"    TP1: {execution.get('target1', '?')} | 盈亏比: {execution.get('riskRewardToTarget1', '?')}")
-            lines.append("")
-    else:
-        lines.append("🔥 EXECUTABLE_NOW: 0 个（当前无直接进场信号）")
-        lines.append("")
-
-    # 按多头评分排序，取前 top_n
-    rows_sorted = sorted(rows, key=lambda x: x.get("longScore", 0), reverse=True)
-
-    lines.append(f"📋 多头评分 Top {top_n}（最接近触发的）")
-    lines.append("-" * 50)
-    for i, r in enumerate(rows_sorted[:top_n], 1):
-        symbol = r.get("symbol", "?")
-        lines.append(f"")
-        lines.append(f"  🥇🥈🥉"[i] if i <= 3 else f"  #{i}", )
-        lines[-1] = f"  {'🥇🥈🥉'[i-1] if i <= 3 else '#'+str(i)} {symbol}"
-        lines.append(f"    状态: {r.get('state', '?')} | 执行状态: {r.get('executableStatus', '?')}")
-        lines.append(f"    多头分: {r.get('longScore', '?')} / 空头分: {r.get('shortScore', '?')}")
-        lines.append(f"    当前价: {r.get('last', '?')}")
-        lines.append(f"    1H区间位置: {round(r.get('h1RangePos', 0) * 100, 1)}%")
-        h1_high = r.get("h1High20")
-        last = r.get("last")
-        if h1_high and last and last > 0:
-            dist = round((h1_high - last) / last * 100, 2)
-            lines.append(f"    1H前高(参考突破位): {h1_high} | 距突破: {dist}%")
-        lines.append(f"    做多理由: {r.get('longReasons', '无')}")
-        if r.get("longWarnings"):
-            lines.append(f"    ⚠️ 警告: {r.get('longWarnings')}")
-        lines.append(f"    不可执行原因: {r.get('executableReason', '无')}")
-        lines.append("")
-
-    # WAIT_TRIGGER 列表
-    wait_triggers = [r for r in rows if r.get("executableStatus") == "WAIT_TRIGGER"]
-    if wait_triggers:
-        lines.append(f"⏳ WAIT_TRIGGER（等待触发）: {len(wait_triggers)} 个")
-        lines.append("-" * 50)
-        for r in wait_triggers:
-            lines.append(f"  {r.get('symbol')} | 多头分:{r.get('longScore')} | 入场:{r.get('entryLow')}~{r.get('entryHigh')} | 止损:{r.get('protection')} | TP1:{r.get('target1')}")
-        lines.append("")
-
-    return "\n".join(lines)
+    cur_w = watchset(payload)
+    prev_w = watchset(prev)
+    union = cur_w | prev_w
+    jac = len(cur_w & prev_w) / len(union) if union else 1.0
+    return {
+        "jaccard": round(jac, 3),
+        "prevAt": prev.get("generatedAt"),
+        "added": sorted(cur_w - prev_w),
+        "dropped": sorted(prev_w - cur_w),
+        "warning": "名单跳变异常" if jac < 0.5 else None,
+    }
 
 
 def write_outputs(payload: dict[str, Any], out_dir: Path) -> dict[str, str]:
     out_dir.mkdir(parents=True, exist_ok=True)
+
+    # P1-7：写入前计算名单稳定性
+    stability = compute_stability(payload, out_dir)
+    if stability:
+        payload["stability"] = stability
+        if stability["warning"]:
+            print(
+                f"⚠️ 名单稳定性警告: Jaccard={stability['jaccard']} "
+                f"(上一份: {stability['prevAt']})",
+                file=sys.stderr,
+                flush=True,
+            )
+
     stamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
     json_path = out_dir / f"{stamp}_binance-usdt-perp-scan.json"
     csv_path = out_dir / f"{stamp}_binance-usdt-perp-summary.csv"
@@ -730,7 +819,7 @@ def main() -> None:
     if hasattr(sys.stdout, "reconfigure"):
         sys.stdout.reconfigure(encoding="utf-8")
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--min-quote-volume", type=float, default=50_000_000)
+    parser.add_argument("--min-quote-volume", type=float, default=30_000_000)
     parser.add_argument("--limit", type=int, default=100, help="Limit to top N symbols by 24h quote volume. Use 0 for no limit.")
     parser.add_argument("--top", type=int, default=12, help="Number of top long/short entries to include in terminal summary.")
     parser.add_argument("--sleep", type=float, default=0.08, help="Delay between symbols to reduce public API pressure.")

@@ -11,6 +11,10 @@ For each USDT perpetual symbol, collect:
 - open interest
 - klines: `15m`, `1h`, `4h`, `1d`
 
+**Important**: The last (unclosed) kline from Binance is always excluded. All indicators
+are computed on closed candles only, eliminating scan-timing bias on volRatio etc.
+Requests fetch 121 bars so that 120 remain after exclusion.
+
 For each timeframe compute:
 
 - close, high, low
@@ -21,6 +25,10 @@ For each timeframe compute:
 - range position inside previous-20 high/low
 - ATR percent
 
+If fewer than 100 closed bars are available, the timeframe is marked
+`dataQuality: "insufficient"` and the symbol is excluded from scoring
+(state = `INSUFFICIENT_DATA`).
+
 ## Long Bias
 
 Constructive long factors:
@@ -29,8 +37,8 @@ Constructive long factors:
 - 4H price above MA7 and MA7 above MA25
 - 1H close above MA7
 - 15m close above MA7
-- 1H close breaks previous-20 high with volume ratio >= 1.3
-- price pulls back near 1H MA25 or a prior breakout level with volume ratio <= 0.9 while 4H remains constructive
+- 1H close breaks previous-20 high with volume ratio >= 1.3 (mutually exclusive with pullback)
+- price pulls back near 1H MA25 with 0.5 <= volume ratio <= 0.9 while 4H remains constructive (mutually exclusive with breakout)
 - 15m volume improves with taker-buy ratio >= 0.52
 - funding is not extreme
 
@@ -61,14 +69,26 @@ Warnings:
 
 ## Labels
 
-- `LONG_TRIGGER_OR_CLOSE`: long score >= 70
-- `LONG_WATCH`: long score >= 58
-- `SHORT_TRIGGER_OR_CLOSE`: short score >= 70
-- `SHORT_WATCH`: short score >= 58
+- `LONG_TRIGGER_OR_CLOSE`: long score >= 60
+- `LONG_WATCH`: long score >= 46
+- `SHORT_TRIGGER_OR_CLOSE`: short score >= 60
+- `SHORT_WATCH`: short score >= 46
+- `AMBIGUOUS`: both sides >= 46 and score gap <= 8 — conflicting signals, do not enter
+- `INSUFFICIENT_DATA`: one or more timeframes have fewer than 100 closed bars
 - `NEUTRAL`: otherwise
+
+Classification picks the stronger side first (no long-first order bias).
 
 If BTC/ETH are weak, downgrade long conclusions and prefer waiting for confirmation.
 If BTC/ETH are strong, downgrade short conclusions and prefer waiting for confirmation.
+If BTC/ETH data is missing from the scan universe, the market filter conservatively
+blocks both sides (`longOk: false, shortOk: false`).
+
+## Stability Check
+
+Each scan computes a Jaccard similarity against the previous scan's watchlist.
+A warning is emitted when Jaccard < 0.5 (excessive list churn). The result is
+stored in the output JSON under `stability`.
 
 ## Immediate Execution Layer
 
