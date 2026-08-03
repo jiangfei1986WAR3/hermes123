@@ -94,6 +94,7 @@ If the state is unclear, infer from the message. Ask only when missing facts wou
 ```
 启动前检查（现有plan/Cron/持仓）
 → 扫描（质量优先）
+→ 质量门槛：所有候选最高分 < 60 → 输出"本轮无达标候选，不生成计划"，终止
 → 自动选最优候选（≤3个，不问用户选哪个）
 → 【必须】运行 fetch_klines.py 拉取候选币原始K线数据（≤3个币×4周期，约15秒）
 → 【必须】加载 trading-analysis 技能，基于 fetch_klines.py 的原始数据（不是扫描器结果），对≤3个候选币跑完整多周期分析（趋势/入场逻辑/保护线/目标区间）
@@ -194,7 +195,7 @@ Use when a plan has concrete entry, stop, target, and risk fields.
    - 回踩/失效类不静默 → 删计划文件 + 删事件文件 → 终止，告知用户
    - 突破类不静默 → 正常继续（触发是预期行为）
 4. Create monitoring Cron (every 1m, no_agent=true, script mode).
-5. 检查事件处理Cron（trading-cron.sh）是否在Cron列表中，不在则创建（every 2m, no_agent=true, deliver=all）。
+5. 检查事件处理Cron（trading-cron.sh）是否在Cron列表中，不在则创建（every 1m, no_agent=true, deliver=all；⚠️调度器实际节奏≈配置+1分钟：1m配置≈实际2分钟，2m配置≈实际3分钟，2026-08-04实测）。
 6. 监控触发后由 binance_executor.py 自动执行，无需人工确认。
 
 ### TRIGGERED: Revalidate Before Execution
