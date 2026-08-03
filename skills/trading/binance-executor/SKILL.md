@@ -96,7 +96,7 @@ Written by signal-monitor to `trading-events/`:
 
 ## Cron Integration
 
-A cron job runs every 2 minutes:
+A cron job runs every 1 minute (actual cadence ≈2 minutes):
 1. `python3 ~/.hermes/scripts/binance_executor.py process-events` — handle triggers
 2. `python3 ~/.hermes/scripts/binance_executor.py manage` — manage positions
 

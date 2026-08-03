@@ -28,7 +28,7 @@ The user prefers quality over speed for opportunity discovery. Unless the user e
 plan 文件 (~/.hermes/trading-plans/<SYMBOL>-plan.json)
   → signal_monitor.py（Cron 每分钟检测价格）
   → 触发后写事件
-  → trading-cron.sh（Cron 每2分钟）
+  → trading-cron.sh（Cron 每1分钟≈实际2分钟）
   → binance_executor.py（5重安全门自动下单）
   → 通知用户
 ```

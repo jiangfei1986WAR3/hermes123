@@ -5,7 +5,7 @@
 | Component | Frequency | Mechanism | Session-dependent? |
 |---|---|---|---|
 | Price monitor | Every 1 min | Cron (no_agent, script) | ❌ Survives session close |
-| Event processor + position manager | Every 2 min | Cron (no_agent, script) | ❌ Survives session close |
+| Event processor + position manager | Every 1 min (≈2m actual) | Cron (no_agent, script) | ❌ Survives session close |
 | Stop-loss / TP1 / TP2 orders | Always | **Binance server-hosted** | ❌ Independent of everything |
 
 ## Trigger-to-Execution Flow
@@ -54,7 +54,7 @@ Each symbol gets its own independent Cron + plan file:
 ```
 Cron every 1m: btc-monitor-check.sh   → reads BTCUSDT-plan.json
 Cron every 1m: eth-monitor-check.sh   → reads ETHUSDT-plan.json
-Cron every 2m: trading-cron.sh        → processes all events + manages all positions
+Cron every 1m (≈2m actual): trading-cron.sh → processes all events + manages all positions
 ```
 
 Up to 6 positions can be open at a time (max_positions=6 config). If 6 positions are already open, a 7th trigger is rejected until one closes.

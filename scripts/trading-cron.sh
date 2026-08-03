@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# trading-cron.sh - 交易事件处理 + 持仓管理（每2分钟由cron调用）
+# trading-cron.sh - 交易事件处理 + 持仓管理（配置1m≈实际2分钟由cron调用）
 # 静默设计：无事发生时不输出任何内容
 
 EXECUTOR="/root/.hermes/scripts/binance_executor.py"

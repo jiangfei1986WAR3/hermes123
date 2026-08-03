@@ -611,7 +611,7 @@ def manage_position(symbol: str, plan: dict) -> dict:
     positions = get_positions()
     pos = next((p for p in positions if p["symbol"] == symbol), None)
     if not pos:
-        # 无持仓时静默，不产生输出（避免 cron 每2分钟发无意义通知）
+        # 无持仓时静默，不产生输出（避免 cron 反复发无意义通知）
         return result
 
     mark_price = pos["mark_price"]
