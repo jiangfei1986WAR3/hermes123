@@ -38,7 +38,7 @@ plan 文件 (~/.hermes/trading-plans/<SYMBOL>-plan.json)
 - 监控脚本：`~/.hermes/scripts/<symbol>-monitor-check.sh`
 - 监控引擎：`~/.hermes/skills/auto-signal-monitor/scripts/signal_monitor.py`
 - 执行器：`~/.hermes/scripts/binance_executor.py`（5门：仓位检查、金额上限、杠杆限制、重复单、隔离模式）
-- 事件处理 Cron：`trading-cron.sh`（每2分钟，处理开仓/TP1/过期）
+- 事件处理 Cron：`trading-cron.sh`（配置1m≈实际2分钟，处理开仓/TP1/过期）
 - 持仓管理：同一 Cron 内 manage 子命令
 
 因此：生成 plan 文件 + 建监控 Cron = 接入自动执行链路。不要输出"仅通知不下单"或"手动确认"的提示。执行器自带安全保障。
