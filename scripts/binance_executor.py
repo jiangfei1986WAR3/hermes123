@@ -516,6 +516,10 @@ def execute_plan(plan_path: str) -> dict:
             stop_loss = stop_loss + delta
             for tp in take_profits:
                 tp["price"] = tp["price"] + delta
+            # ★ 取整到币安 tickSize：保证写回值与挂单值一致（manage_position 用它匹配 Algo 单）
+            stop_loss = round_price(symbol, stop_loss)
+            for tp in take_profits:
+                tp["price"] = round_price(symbol, tp["price"])
             tp_str = '/'.join(f'{tp["price"]:.6g}' for tp in take_profits)
             log.info(f"滑点校准: 计划价 {entry_price} → 实际 {actual_entry}，"
                      f"平移 {delta:+.6g}，新止损 {stop_loss:.6g}，新TP {tp_str}")
