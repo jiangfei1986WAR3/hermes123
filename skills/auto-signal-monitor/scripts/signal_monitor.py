@@ -54,6 +54,7 @@ def kline_summary(symbol, interval, limit=80):
         "high20": max(highs[-20:]),
         "takerBuyRatio20": (sum(taker_buys[-20:]) / sum(volumes[-20:])) if sum(volumes[-20:]) else 0.0,
         "lastClosedClose": closes[-2],
+        "closes20": closes[-21:-1],  # 最近20根已收盘K线收盘价(不含当前未收盘K线),供回踩顺序判定
         "lastClosedHigh": highs[-2],
         "lastClosedLow": lows[-2],
         "lastClosedVolume": volumes[-2],
@@ -126,13 +127,28 @@ def evaluate_pullback_reclaim(rule, data):
     invalidation = float(rule["invalidation_price"])
     side = rule.get("side", "above")
     touched_zone = candle["low20"] <= pullback_high and candle["high20"] >= pullback_low
+    # 修复:区分"真回踩"(突破后收盘价曾回落/回升过)与"直接路过"(从未回落直接越过reclaim)。
+    # 做多:最早收盘≥reclaim(突破)之后,出现过收盘<reclaim(回落) → 真回踩
+    # 做空:镜像——最早收盘≤reclaim(跌破)之后,出现过收盘>reclaim(回升) → 真回踩
+    # closes20 缺失/为空时退回旧行为(不因新逻辑误拦截)
+    closes20 = candle.get("closes20") or []
+    had_pullback = True
+    if closes20:
+        if side == "above":
+            first_above = next((i for i, c in enumerate(closes20) if c >= reclaim), None)
+            last_below = max((i for i, c in enumerate(closes20) if c < reclaim), default=None)
+            had_pullback = first_above is not None and last_below is not None and first_above < last_below
+        else:
+            first_below = next((i for i, c in enumerate(closes20) if c <= reclaim), None)
+            last_above = max((i for i, c in enumerate(closes20) if c > reclaim), default=None)
+            had_pullback = first_below is not None and last_above is not None and first_below < last_above
     if side == "above":
         not_invalidated = data["last"] > invalidation and candle["lastClosedLow"] > invalidation
         reclaimed = data["last"] >= reclaim or candle["lastClosedClose"] >= reclaim
     else:
         not_invalidated = data["last"] < invalidation and candle["lastClosedHigh"] < invalidation
         reclaimed = data["last"] <= reclaim or candle["lastClosedClose"] <= reclaim
-    if touched_zone and not_invalidated and reclaimed and rule_volume_ok(rule, data):
+    if touched_zone and had_pullback and not_invalidated and reclaimed and rule_volume_ok(rule, data):
         return True, f"{rule.get('message', rule['id'])}; last={data['last']:g}, reclaim={reclaim:g}"
     return False, ""
 

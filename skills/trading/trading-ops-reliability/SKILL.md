@@ -12,11 +12,20 @@ Hard-won operational lessons from running the user's live Binance futures tradin
 - **NEVER** use `terminal(background=true)` or nohup for long-running price monitors. They are session-scoped — closing the web page, disconnecting WeChat, or ending the TUI session kills them silently.
 - **ALWAYS** use Hermes Cron (`no_agent=true`, script mode) for monitoring. Cron is managed by the daemon and survives all session closures.
 - Pattern: create a wrapper script (`~/.hermes/scripts/<symbol>-monitor-check.sh`) that runs `signal_monitor.py` in single-shot mode, filters DONT_NOTIFY lines, and only outputs on ALERT/TRIGGER/EXPIRED/**EVENT_WRITTEN**. Then create a Cron with `schedule="every 1m"`, `no_agent=true`, `deliver=all`.
-- **⚠️ Verification/validation runs MUST use `--dry-run`**: `signal_monitor.py --plan <plan> --dry-run` evaluates but writes NO event files and NO state. Running it WITHOUT `--dry-run` for a "check" writes real TRIGGER event files into `trading-events/`, which trading-cron.sh picks up within 2 minutes → executor opens a real position the user never asked for. (Incident 2026-08-03: the 验证拦截 run for BNB wrote a TRIGGER event; trading-cron opened BNB long 0.16 @ 592.41 — the exact trade the validation had just rejected.) The `--dry-run` flag is a pure additive switch: Cron mode without the flag is byte-identical to before.
+- **⚠️ Verification/validation runs MUST use `--dry-run`**: `signal_monitor.py --plan <plan> --dry-run` evaluates but writes NO event files and NO state. Running it WITHOUT `--dry-run` for a "check" writes real TRIGGER event files into `trading-events/`, which trading-cron.sh picks up within 2 minutes → executor opens a real position the user never asked for. (Incident 2026-08-03: the 验证拦截 run for BNB wrote a TRIGGER event; trading-cron opened BNB long 0.16 @ 592.41 — the exact trade the validation had just rejected.) The `--dry-run` flag is a pure additive switch: Cron mode without the flag is byte-identical to before. **(Recurred 2026-08-05 XLM: dry-run 已 ALERT 后仍跑 monitor-check.sh 看输出 → 写出 TRIGGER 事件文件，及时删除未开仓。验证 = 只跑 `--dry-run` 一条命令；monitor-check.sh 是生产通道，验证阶段碰都不碰。)**
 - **⚠️ grep MUST include `EVENT_WRITTEN`**: `grep -qiE "ALERT|TRIGGER|EXPIRED|EVENT_WRITTEN"`. Without it, the event-file-written confirmation line is swallowed. The `auto-signal-monitor` skill template has been fixed, but always verify.
 - **⚠️ NEVER overwrite existing monitor-check.sh with `write_file`**: check `[ -f ... ]` first. If the file exists, it may contain fixes newer than the skill template. Only create from template when the file does NOT exist. (Incident 2026-07-26: `write_file` with stale template removed `EVENT_WRITTEN` from a previously-fixed script, regressing it.)
 - **⚠️ Cron `script` param must be relative to `~/.hermes/scripts/`** — pass just the filename (e.g. `uni-monitor-check.sh`), NOT an absolute path (`/root/.hermes/scripts/...`) or home-relative path (`~/...`). Absolute/home paths are rejected with `"Script path must be relative to ~/.hermes/scripts/"`. The script file must already exist under `~/.hermes/scripts/`.
 - `signal_monitor.py` without `--loop` runs ONE check and exits — this is correct for Cron usage. The `--loop` flag is only for temporary manual debugging.
+
+### Cron 频率修改验证与描述同步（2026-08-04 实测）
+
+- 改 Cron schedule 后**必须实测验证实际节奏**：看 `~/.hermes/cron/output/<job_id>/` 输出文件时间戳序列（连续 3+ 个文件间隔是否稳定），不能只信 `cronjob list` 的 next_run/last_run——那只是调度器视图。
+- 实测规律：Hermes 调度器对 no_agent 脚本 job 的**实际节奏 ≈ 配置 + 1 分钟**（every 2m→实际 3m；every 1m→实际 2m，2026-08-04 改 1m 后验证 23:56→23:58→00:00→00:02 稳定 2m）。一切延迟上限按实际节奏计算，不按配置值。
+- 频率加密安全前提：脚本耗时 << 周期（trading-cron 三步实测 0.556s）+ 操作幂等（process-events 有持仓检查、manage 查 Algo 单存在性、watch 快照对比）。满足则频率变化零风险、可一行回退。
+- 频率与微信限流**无关**：iLink 限流看"发送次数"（事件时才输出），不看"检查次数"。
+- 改频率后全库同步旧描述（中英文都要搜：`每2分钟|every 2m|every 2 minutes|[23] minutes|3分钟|3-4 分钟`，覆盖 skills/trading-command-center、skills/trading/trading-ops-reliability(+references/)、skills/trading/binance-executor、scripts/trading-cron.sh、scripts/binance_executor.py——脚本注释也算）。甄别三类命中：①过时描述→改；②**历史记录（bug/incident 描述）→不改**；③**规律说明（如"2m配置≈实际3分钟"）→不改**。改完 `bash -n`/`py_compile` + 实跑一次 + 再 grep 复查 + 推 GitHub。
+- 工具坑：V4A 多文件补丁对含中文 UTF-8 的 `.sh` 报 "Binary file" → 该文件改用 replace 模式单独 patch。
 
 ## Cross-Session State Conflicts (CRITICAL)
 
@@ -32,8 +41,13 @@ Hard-won operational lessons from running the user's live Binance futures tradin
 
 ### Diagnostic Rule
 - If `pgrep -af "signal_monitor"` returns a process AND `cronjob action=list` shows a monitor Cron for the same symbol → **the background process is stale/wrong**. Kill it, do NOT report "monitoring is running normally" based on the background process. The Cron is the source of truth.
+- **Cron 全部消失时的诊断（2026-08-04）**：`cronjob list` 返回 0 个 job 时，用 `ls -la ~/.hermes/cron/` 看 `jobs.json`（空列表 68 字节）和 `executions.db` 的 mtime 推断清空时刻，再 `session_search` 找执行者（用户可能在微信/Web 端让另一会话执行了"清空所有监控和计划"——包括 trading-cron）。**trading-cron 也被删时**：若空仓+按用户计划"清仓后清空监控"则属预期，下次找机会时按新参数重建即可；若用户不知情，需追查。重建 trading-cron 用 `schedule="every 1m"`（技能第 5 步参数），建后等 2-3 个 tick 看 `~/.hermes/cron/output/<new_job_id>/` 文件时间戳验证节奏（1m 配置≈2m 实际）。
 
-## Duplicate Prevention
+## 分析流程完整性：trading-analysis 全量加载不可跳过 (2026-08-04)
+
+扫描选币 → fetch_klines → **必须** `skill_view(trading-analysis)` **并并行** `skill_view` 其 3 个 reference（crypto-futures-system.md / entry-exit-position-management.md / volume-price-analysis.md）。历史标准动作是全加载（8/1、8/3 会话记录可查）；主技能与 references 缺一 = 流程未完成（技能硬性规则）。
+
+⚠️ 教训：2026-08-04 凭记忆分析、跳过全部加载（"12:40 轮加载过"不成立——每轮流程独立），用户质询"是否严格按流程"后整批 LINK/LTC/AVAX 计划被清除。**"上次会话加载过"不算数，本轮必须重新加载。** 用户会主动核对流程完整性，宁可全清不冒险。
 
 - Before creating a monitor Cron for any symbol, **ALWAYS** run `cronjob action=list` to check for existing monitors on that symbol.
 - If a monitor already exists, tell the user — do NOT create a duplicate. Two monitors can write duplicate TRIGGER events.
@@ -272,7 +286,17 @@ When generating a plan via trading-command-center workflow, the plan JSON MUST c
 3. `require_close: true` for breakout/pullback entries (15m candle close confirmation)
 4. `timeframe: "15m"` matching the monitor's check interval
 5. **Rule IDs must follow naming convention**: entry rules must NOT contain "invalid"; invalidation rules MUST contain "invalid" (see "Rule ID Naming" section above)
-6. **盈亏比检查（2026-08-03 BTC 复盘教训）**：TP1 距离 ≥ 止损距离（硬性 ≥1R），破位/突破类目标空间 ≥2R 才建计划。低波动大盘币（BTC/ETH，ATR 小）破位后下方空间常贴着支撑位（1R 上下）——执行再完美也难盈利（案例：BTC 破位空止损 0.71% 目标 0.83% → 1.16R，止损离场 -1.33U；同日 TAO 2.7R 正常获利）。候选筛选阶段就应排除盈亏比不足的标的
+6. **盈亏比检查（2026-08-03 BTC 复盘教训）**：TP1 距离 ≥ 止损距离（硬性 ≥1R），破位/突破类目标空间 ≥2R 才建计划。低波动大盘币（BTC/ETH，ATR 小）破位后下方空间常贴着支撑位（1R 上下）——执行再完美也难盈利（案例：BTC 破位空止损 0.71% 目标 0.83% → 1.16R，止损离场 -1.33U；同日 TAO 2.7R 正常获利）。候选筛选阶段就应排除盈亏比不足的标的。**实际筛选案例（2026-08-04）**：1000PEPE 74 分但因突破后第一阻力仅 0.7% 空间 vs 止损 1.9% → 拒；LTC 空 60 分因 TP1 0.84% < 止损 1.25% + 4h MACD 金叉逆势 → 拒；仅 1000SHIB 78 分 1R 达标 → 建计划。**执行流程：扫描出候选 → 先粗筛盈亏比（阻力/支撑距离 vs 止损距离）→ 再拉 K 线精析**，避免为低分且盈亏比不足的币浪费深度分析。
+
+**位置过极端也是否决项：最高分常被否，降级到下一个候选（2026-08-06 案例）**：本轮 55 币扫描，多空双榜第一全被拒，第三名成为唯一计划。
+- 追高（PAXG/XAUT 76 分，全场最高）：日线/4H/1H 全多头排列且量价效率健康，但 **1H `rangePos`=1.09（现价已在 20 根 K 线区间之上）+ 4H RSI 86.4 / 1H RSI 74.7 双超买 + 价格触 4H 布林上轨 + 15m 巨量后缩量（2.45x涨→2.32x跌→0.29x跌，放量滞涨前兆）** → 拒。等回踩 4H MA7 缩量确认再看。
+- 追空（XLM 68 分，空头榜第一）：日线/4H/1H 全空头排列方向没错，但 **4H RSI 29.3 超卖 + 1H 跌破布林下轨 + 现价距 24h 低点仅 0.4% + 资金费率 −0.0266% 已转负（空头拥挤）** → 拒。
+- 入选（ENA 66 分，多头榜第三）：日线/4H 多头排列 + 日线 MACD 红柱放大，但 **RSI 仅 59.7/51.2 → 「趋势在、位置不高」**，且 1H 有 3059 万量能的锤子线（放量小跌、承接增强）→ 建。
+
+判定要点：`rangePos > 1`（或 < 0）意味着现价已在近 20 根区间之外，配合双周期 RSI 极值 = 位置否决，与分数无关。**向用户说明被否候选的理由，不要静默丢弃**——用户会问"为什么不选分最高的"。
+另：扫描器 `stability.warning`（名单跳变 / jaccard 偏低，本轮 0.385）说明短线资金切换快 → 缩短 plan `expires_at` 并在输出中提示。
+
+**高分≠必建：动能方向与超买超卖也是否决项（2026-08-04 案例）**：AAVE 空 78 分（1H 放量跌破 20 根低点，结构看似完美）但 K 线精析发现 4h MACD **金叉红柱缩小**（空头动能已在减弱）+ 15m RSI 25.7 **超卖** + 1h RSI 31.3 → 贴 24h 低点追空、反弹风险大 → 拒。同轮 ZEC/BNB 多 78 分（放量突破 20 根高点 + 4h 多头排列）→ 建。**筛选顺序：分数 ≥60 → 盈亏比粗筛 → K线精析时检查动能方向（MACD 柱是否与持仓方向一致）和 RSI 超买超卖 → 全过才建计划**。
 
 **Quick validation command**:
 ```bash
@@ -289,6 +313,30 @@ print(f'OK: vol_ratio>={entry[\"min_volume_ratio\"]}, require_close={entry[\"req
 ```
 
 If validation fails, regenerate the plan with the full `rules` array. Do NOT deploy the monitor with a price-only plan.
+
+### pullback_reclaim 规则陷阱：现价已越过 reclaim = 建完立即触发（2026-08-04）✅ 已修复（2026-08-06）
+
+`evaluate_pullback_reclaim()`（signal_monitor.py:121-153）触发判断用**实时价**：`reclaimed = last >= reclaim OR lastClosedClose >= reclaim`；`touched_zone` 只要最近20根K线曾触碰回踩区即真。因此建回踩单时若**现价已高于 reclaim 价**（AVAX 回踩多 reclaim 6.62 而现价 6.86），建完第一分钟即触发 = 变相追高，不是"等回踩"。要点：
+
+- **2026-08-06 修复**：新增 `had_pullback` 顺序判定（需 `closes20` 序列）——做多要求"最早收盘≥reclaim 之后出现过收盘<reclaim"（真回落过），做空镜像要求"最早收盘≤reclaim 之后出现过收盘>reclaim"。直接路过（从未回落/回升）不再触发；真回踩照常触发。XLM 镜像陷阱（现价已低于 reclaim=追空）同被修复
+- 建计划后必跑 `--dry-run`；回踩类非静默 → 按验证拦截规则不建（AVAX 68分因此被拦，正确；误建会变成即时追高单）
+- 正确构造"等反弹到位再触发"的空单：`pullback_low/high` 设在最近20根K线区间**之上**（LINK retest short：pullback 区 8.27-8.316 > 20根内高点 8.229 → touched_zone=false 保持静默，价格真反弹进区后才激活；跌破 reclaim 8.27 触发）
+- pullback_reclaim 不走 `require_close`（用 last/lastClosedClose 双通道），别依赖 require_close 字段控制它
+- ⚠️ "构造正确"≠必静默（2026-08-05 XLM 例）：反弹空按 LINK 构造法（pullback 0.1700-0.1717 高于现价 0.1679）dry-run 仍 ALERT 立即触发（价格曾到过区间+现跌破=追空）→ 按规则不建删计划。**dry-run 是唯一裁判，任何"应该静默"的预期都以 dry-run 输出为准**；镜像陷阱：现价已**低于** reclaim 同样立即触发（追空），不只是"高于"（追高 AVAX 例）
+
+## fetch_klines.py 输出含 ANSI 色码 → read_file 判定 binary（2026-08-06）
+
+`trading-analysis/scripts/fetch_klines.py` 的 stdout 带终端色码，重定向到文件后 `read_file` 直接报 `Binary file - cannot display as text`，剥掉 `\x1b[...m` 后**仍可能**被判 binary（残留控制字符）。别卡在 `read_file` 上反复重试：
+
+```bash
+python3 ~/.hermes/skills/trading-analysis/scripts/fetch_klines.py \
+  --symbols A,B,C --timeframes 15m,1h,4h,1d --bars 100 > /tmp/kl.txt 2>&1
+# 用 terminal 分段读，绕开 read_file 的 binary 判定
+sed -n '1,110p' /tmp/kl.txt     # 第一个币
+sed -n '111,321p' /tmp/kl.txt   # 其余
+```
+
+先 `wc -l` 拿总行数再决定分段边界。3 个币 × 4 周期约 320 行，两段读完。
 
 ## Config Change Audit Procedure (MANDATORY before any config change)
 
@@ -401,11 +449,13 @@ for tp in take_profits:
 ```
 This makes plan-file prices byte-identical to exchange order prices → matching succeeds. Option B (widen tolerance to 0.001×price) was considered and rejected — addresses the symptom, not the source.
 
-**Why previous 10 breakeven moves worked despite this bug**: the bug only fires when slippage calibration writes back (delta ≠ 0). All prior trades (NEAR/AAVE/WLD/UNI/LINK/ADA/BEAT/SUI/BTC/AVAX) filled at or extremely near the plan price → delta ≈ 0 → no write-back → plan-file prices stayed as originally written → matching succeeded. IDOL 2026-08-03 was the FIRST trade with material slippage (plan 0.02365 vs fill 0.023965, +1.3%) → write-back triggered → bug exposed. **This is why the bug is size-independent**: it will fire on ANY future trade with nonzero slippage, at 10U or 1000U margin alike — only the dollar loss scales. User explicitly asked "本金大了就不会发生吗" — answer is NO, fix before scaling up.
+**Why previous 10 breakeven moves worked despite this bug (corrected 2026-08-04 via log evidence — earlier "delta≈0, no write-back" theory was WRONG)**: ALL 10 prior trades had nonzero slippage and DID write back shifted prices. Verify with `grep -n "滑点校准" ~/.hermes/trading-executor.log` (⚠️ that log line contains NO symbol name — grep the token alone and identify the trade by timestamp/plan price): WLD 0.3095→0.3067, UNI 4.04→4.065, LINK 8.24→8.234, BTC 62950→62940.2 (delta −9.8!), AVAX 6.3→6.288. They matched because the matching tolerance is **RELATIVE** (0.0001 × plan_price) and their shifted prices round-tripped cleanly: BTC written 63150.200000000004 vs exchange order 63150.2 → diff 4e-10 ≪ tolerance 6.3 ✅; WLD diff ~1e-13 ≪ 3.1e-5 ✅. IDOL failed because its avgPrice carried a long fractional tail from **multi-fill averaging** (three partial fills @0.02396/0.02396/0.02397 → avg 0.023965274361400186), so shifted prices hit a rounding discrepancy (0.023115274361400186 → tick 0.02312, diff 4.7e-6) that EXCEEDED the tiny relative tolerance at low prices (0.0001×0.023 = 2.3e-6). Trigger condition: low-priced symbol + multi-fill avgPrice tail (or any delta that doesn't round-trip within 0.0001×price). **Size-independent**: fires at 10U or 1000U margin alike — only the dollar loss scales. User explicitly asked "本金大了就不会发生吗" — answer is NO, fix before scaling up. Fixed in commit 6b74138.
 
 **Verification (2026-08-03, real symbol info)**: three price magnitudes tested — IDOL (tick 1e-05), UNI (tick 0.001), BTC (tick 0.1). Before fix: `matches(round_price(raw), raw)` = False for both SL and TP1 (bug reproduced exactly). After fix: written-back price == exchange order price, both `sl_at_original` and `tp1_orders` match True. Zero-slippage path (delta=0) never enters the calibration branch → byte-identical behavior. Rounded price conforms to tickSize (exchange accepts it).
 
 **tickSize is exchange-mandated, NOT agent-chosen**: `round_price()` reads the exchange's PRICE_FILTER (IDOL 0.00001 / UNI 0.001 / BTC 0.1). When the user asks "取整到几位小数好", the answer is always "币安 tickSize 决定" — rounding coarser silently shifts stops, rounding finer gets rejected by the exchange. The fix uses the exchange's own ruler, so written-back values always equal placed-order values.
+
+**用户问"取整会不会影响挂单链路"（2026-08-04）→ 零影响，因为取整幂等**: 挂单代码路径（`_place_conditional_order` 内 `round_price`)与写回代码路径是独立的两行代码，写回取整与否都不改变挂单结果——`round_price(round_price(x)) == round_price(x)`。修复只改"本地账本"（计划文件写回值），不改"交易所交易"（挂单/触发/执行）。向用户解释时用类比："改的是自己家的记事本，餐厅出餐结账不受影响"。唯一受影响的环节是 manage_position 匹配和 watch 分类——都是从"坏的"变成"好的"。
 
 **Durable lesson**: any price written to a file that later gets matched against exchange order prices MUST be rounded to the exchange tick size FIRST. "Write-back" alone is not enough — the written value must equal the placed-order value.
 
@@ -644,6 +694,8 @@ User explicitly demands: "严谨 不能因为修改这个问题引入新的逻�
 - **Discuss feasibility BEFORE writing code.** User asks "是否可以...?" or "我们先探讨先不修改任何代码" → analyze pros/cons, present trade-offs, wait for explicit "OK 进行修复" before touching code.
 - **Present severity assessment honestly.** If a bug only triggers under specific conditions (e.g. "only when you first short"), say so. User appreciates knowing "现在不咬你" vs "每笔都在发生".
 - **Tables for status tracking.** After each fix, show a cumulative table: bug#, description, severity, status. User tracks progress this way.
+- **改技能文档前也先交代性质（2026-08-03 教训）**：用户对"修改交易系统文件"敏感（看到 patch 消息会警觉"你还修改了我们系统的 XX？？？"）。任何修改——包括 SKILL.md 技能文档——先明确"改的是文档/注释（零运行影响）还是代码（运行组件）"，列出原→新内容，用户确认后再动。类比：改的是操作手册，不是机器。
+- **报告结论时附可验证证据链（2026-08-04 用户问"你要是偷懒了故意说没偷懒我怎么知道"）**：用户重视可验证证据而非口头声明。报告系统状态/修复结果时主动附证据位置（文件路径、日志行、时间戳、Cron job_id、可复核命令），如 `grep -n "滑点校准" ~/.hermes/trading-executor.log` 验证移保本根因、`ls ~/.hermes/trading-events/` 验证 --dry-run 无副作用。用户会抽查，给证据链比"我检查过了"更省事；关键环节（选币/验证/建Cron）展示痕迹文件本身。
 
 ## Post-Restart Health Check (网关/Hermes 重启后, verified 2026-08-03)
 
@@ -654,6 +706,30 @@ User explicitly demands: "严谨 不能因为修改这个问题引入新的逻�
 3. `tail ~/.hermes/logs/gateway.log` — 确认 `✓ weixin connected`（或对应平台重连成功；iLink 重启后第一条通知可能被 30s 限流吃掉，属正常）
 4. 持仓/挂单在交易所侧，重启不影响：`positions` + `get_open_algo_orders` 复查数量即可
 5. 日志扫描 `grep -iE "error|traceback" ~/.hermes/logs/*.log` — 区分真故障与无害项：dashboard 启动期 sqlite schema 竞态（自愈）、auxiliary 备用模型无 credit（预存状态）、tools.registry check_fn False（未配置项）都不是故障
+
+### Hermes 版本升级后确认 (verified 2026-08-04, v0.20.0)
+
+用户升级 Hermes 后问"更新了什么/是否正常"，按此流程：
+
+1. `hermes --version` 确认版本号 + `hermes version` 看 "Up to date"；升级日志 `~/.hermes/logs/update.log`（只有构建输出，无 changelog）
+2. **查 changelog 的正确姿势**：本地安装目录是 git 浅克隆（`git log` 只有 1 条，无历史），不要浪费时间找本地 changelog。直接：
+   ```bash
+   curl -sL --max-time 20 "https://api.github.com/repos/NousResearch/hermes-agent/releases" -o /tmp/hermes-release.json
+   # 解析 data[0].body（最新 release 正文，按 ## 分节）
+   ```
+   然后按**用户实际使用的功能**挑相关 section 总结（微信网关/Cron/DeepSeek模型/交易脚本），别整篇贴
+3. **升级对交易系统零影响的三重确认**：①交易 skills 是用户级（升级日志 "Skills are up to date" 即未动）；②executor/monitor 脚本独立于 Hermes 版本；③Cron job 随 daemon 重启自动恢复——`cronjob list` 看 last_run_at 已到当前时刻即可
+4. **升级后别误判计划消失为故障**：升级重启窗口内，计划可能因**失效线触发**被自动清理（2026-08-04 实例：SHIB/DOGE 22:33 失效清理，与升级无关）。先查 `grep -iE "计划失效|已清理" ~/.hermes/trading-executor.log` 确认时间线再下结论
+
+### ⚠️ "Installed gateway service definition is outdated" 提示 (2026-08-04)
+
+升级后 `hermes gateway status` 常见此提示。含义：systemd unit 文件（`~/.config/systemd/user/hermes-gateway.service`）还是旧版定义，新版 Hermes 自带更新的 unit。
+
+- **处理：必须用 `hermes gateway restart`**（官方提示 "auto-refreshes the unit"），它会重装新版 unit 定义并重启进程
+- ❌ `systemctl --user restart hermes-gateway` **不会**刷新 unit 文件（只重启进程），outdated 提示保留
+- ⚠️ **重启后提示可能仍在（2026-08-04 实测）**：`hermes gateway restart` 日志出现 `Updated gateway user service definition to match the current Hermes install` 即定义已更新成功，outdated 提示是状态检测标志未刷新，属无害残留，下次升级/重启自然消失。别因提示仍在反复重启折腾——以重启日志那行为准，不看 status 提示
+- 影响：不处理也能用（旧定义兼容运行），下次 `hermes gateway restart` 自动刷新；对交易系统零影响（独立脚本）
+- 类比：门卫还在用旧版值班手册，需要重新上岗（重启）才换新手册
 
 ## Server Health Check（用户问"服务器是否健康/整体状态"时）
 
@@ -684,14 +760,20 @@ When the user asks "is the monitor running?" or "check the system":
    
    **Incident (2026-07-30)**: Agent queried `/fapi/v1/openOrders` → 0 results → `/fapi/v1/allOrders` → only MARKET fills visible → concluded "executor NEVER placed SL/TP, positions are naked." User said "我币安后台能查到挂单啊" — orders existed on the exchange the whole time. The agent was looking at the wrong endpoint. Root confusion: the Algo Order API section above documents this, but the diagnostic flow didn't enforce it strongly enough.
 
-### Architecture Reassurance (user often asks "过期会不会影响持仓？")
+ **⚠️ Account 查询 endpoint 是 v2**：`GET /fapi/v2/positionRisk`、`GET /fapi/v2/balance`；`/fapi/v1/positionRisk` 返回 404（2026-08-05 手写签名诊断时实踩）。手写查询一律复制 executor 的 v2 路径，或直接复用 `binance_executor.py positions`。
+
+ 8. **状态汇报前对每个活跃 plan 跑一次 `--dry-run`**（`signal_monitor.py --plan <SYMBOL>-plan.json --dry-run`，只评估不写事件）：输出 DONT_NOTIFY = 监控静默等待中（健康）；出现 ALERT/EVENT_WRITTEN 需立即处理。给用户的"监控状态"以 dry-run 输出为准。
+ 8.5 **用户问"到触发价了为什么没进场"（2026-08-05 BNB 例）**：先拉 15m K 线对比 high vs close——盘中插针触及触发价但收盘未站上（require_close=true）= 系统正确拒绝假突破，不是漏触发。BNB 实证：10:00 那根 15m 高 606.08（精确触及触发价）收 603.05 未站上 → 不触发 → 随后跌回 599（若盘中追进已被止损）。回答时附 K 线行列表（时间/开/高/低/收）当证据，用户信服。
+ 9. **清理后扫孤儿脚本**：`ls ~/.hermes/scripts/*-monitor-check.sh` 中无对应 plan（trading-plans/）且无对应 Cron 的 = 历史残留死脚本（不运行、无害但会积累，2026-08-05 发现 4 个）。报告用户后一并删除——用户保守，先问再删。
+
+ ### Architecture Reassurance (user often asks "过期会不会影响持仓？")
 
 Price monitor Crons and position management are **completely independent**:
 
 | Component | Depends on | Affects |
 |-----------|-----------|---------|
 | Price monitor Crons (1m) | plan.json files | **Opening** new positions only |
-| Core trading-cron.sh (配置2m/实际3m) | Exchange API (live positions) | **Managing** existing positions (TP1, breakeven, watch) |
+| Core trading-cron.sh (配置1m/实际2m) | Exchange API (live positions) | **Managing** existing positions (TP1, breakeven, watch) |
 
 Deleting expired monitor Crons or plan files has **ZERO impact** on existing positions. The core cron queries Binance directly — it never reads plan files for position management. Always explain this clearly when the user worries about cleanup affecting their trades.
 
