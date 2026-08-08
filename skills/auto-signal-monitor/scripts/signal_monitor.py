@@ -402,6 +402,11 @@ def run_plan_path(plan_path, dry_run=False):
         except (ValueError, TypeError) as exc:
             print(f"{datetime.now(timezone.utc).isoformat()} WARNING 解析 expires_at 失败: {exc}",
                   file=sys.stderr, flush=True)
+    rules = plan.get("rules") or []
+    if not rules:
+        print(f"{datetime.now(timezone.utc).isoformat()} ERROR {plan['symbol']}: 计划缺少 rules 数组（或为空），监控引擎无规则可评估=死计划。请用标准格式重建。",
+              file=sys.stderr, flush=True)
+        sys.exit(2)
     state_path = plan_path.with_suffix(".state.json")
     run_once(plan, state_path, dry_run=dry_run)
 
@@ -414,6 +419,8 @@ def run_directory_once(plans_dir):
     for path in paths:
         try:
             run_plan_path(path)
+        except SystemExit:
+            continue  # 单个坏计划已由 run_plan_path 报错退出，不拖垮同目录其他计划的扫描
         except Exception as exc:
             print(f"{datetime.now(timezone.utc).isoformat()} ERROR {path.name}: {exc}", file=sys.stderr, flush=True)
 
@@ -438,6 +445,8 @@ def main():
                 run_plan_path(Path(args.plan), dry_run=args.dry_run)
             else:
                 run_directory_once(args.plans_dir)
+        except SystemExit:
+            pass  # 坏计划校验失败退出：单次模式自然结束；--loop 模式下等下轮重试，不崩溃
         except Exception as exc:
             print(f"{datetime.now(timezone.utc).isoformat()} ERROR {exc}", file=sys.stderr, flush=True)
         if args.once:
