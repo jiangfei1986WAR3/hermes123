@@ -762,9 +762,21 @@ def process_events() -> list:
             elif event_type == "PLAN_EXPIRED":
                 log.info(f"计划过期: {symbol}")
                 plan_file = os.path.join(PLANS_DIR, f"{symbol}-plan.json")
+                has_position = False
                 if os.path.exists(plan_file):
-                    os.remove(plan_file)
-                results.append({"symbol": symbol, "action": "expired", "cleaned": True})
+                    # ★ 有持仓时：保留计划文件（移保本/通知需要它），与 INVALIDATION 分支一致
+                    #   无持仓时：正常清理
+                    try:
+                        positions = get_positions()
+                        has_position = any(p["symbol"] == symbol for p in positions)
+                    except Exception as e:
+                        log.warning(f"查询持仓失败，保守按有持仓处理: {symbol} ({e})")
+                        has_position = True
+                    if has_position:
+                        log.info(f"{symbol} 计划已过期但有活跃持仓，保留计划文件（移保本持续有效）")
+                    else:
+                        os.remove(plan_file)
+                results.append({"symbol": symbol, "action": "expired", "cleaned": not has_position})
                 os.remove(fpath)
 
             elif event_type == "INVALIDATION":
