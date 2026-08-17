@@ -298,6 +298,9 @@ When generating a plan via trading-command-center workflow, the plan JSON MUST c
 - 08-04 AAVE 78 分拒：15m RSI 25.7 超卖 + 1h RSI 31.3 + 贴 24h 低点（距前低 <1ATR）+ 4h MACD 金叉红柱缩小 → 破位空已超卖，反弹风险大
 - 08-08 AAVE 68 分建：同样全周期空头排列 + 15m 放量 2.56x 阴线破位，但 **RSI 41-47 未超卖 + 距前低 2.5%（>1ATR）+ R 1.9/2.8 达标** → 破位刚发生、位置不极端，可建（4h MACD 金叉=空头动能衰减是逆风，靠 market_filter 挡 + 输出提示用户，不是否决项）
 - 判别顺序：破位空先看 RSI 是否 <30（超卖）+ 距前低是否 <1ATR，任一命中=拒；都安全再看 R 达标才建
+- **判别维度③：破位下方有无结构位（2026-08-15 XRP/UNI 轮）**：前低本身 = 100 根 K 线最低点（XRP 0.9844、UNI 3.162 都是日线区间最低）→ 破位后 TP 无处定价，任何 TP 价位都是拍脑袋 → 违反 R 预检（禁止报未验算价位组合）→ **破位空不建，只能等反弹空**。与维度①②独立：这轮 XRP RSI 43 未超卖、距前低 1.9% 过线，但下方无结构照样否决。判别法：fetch_klines 的支撑位列表里除前低外无更低的近期结构位，且日线/4h 区间低 = 该前低
+- **判别维度④：空在修复段（同轮）**：4h/1h MACD 金叉红柱放大 = 短线反弹修复进行中，此刻追空 = 空在修复段，反弹随时延续。反弹空也要等反弹到阻力区（1h 阻力/MA25 区，XRP 1.006-1.009、UNI 3.31-3.35）遇阻转弱才建——**"等反弹到位"是时机问题不是结构问题，标 WATCH_ONLY 带复查条件，不追不建**
+- **下跌末段市场画像（同轮）**：大盘偏空（BTC/ETH 双 SHORT_WATCH）但空头候选全部"贴前低+动能衰减+超卖边缘"、多头候选全部"顶到压力位"= 破位空间已释放大半，市场在等方向。此形态下多轮全 WATCH_ONLY 是正确结果，如实报告"下跌末段、等节奏"，别因大盘偏空就放松空单标准
 - BANK 08-08（60 分）同款追空镜像再次拒绝：4h RSI 33.7 近超卖 + 资金费率 -0.00018 已负（空头拥挤）+ 4h 锤子线止跌 + 24h -6.9% + R<1.2（止损 3% vs TP1 空间 3.5%）——与记忆例同款，规则两次验证，见即拒
 
 判定要点：`rangePos > 1`（或 < 0）意味着现价已在近 20 根区间之外，配合双周期 RSI 极值 = 位置否决，与分数无关。**向用户说明被否候选的理由，不要静默丢弃**——用户会问"为什么不选分最高的"。
@@ -438,11 +441,14 @@ Skills and scripts can be backed up to a git repo for server migration:
 4. **Path quirk**: `binance-executor` and `trading-ops-reliability` live under `skills/trading/` subdirectory, not root `skills/`. The restore script must handle this.
 5. After restore: manually configure API keys + rebuild Cron jobs (ask Hermes "帮我重建交易监控 Cron")
 6. Current backup repo: `github.com/jiangfei1986WAR3/hermes123`
-7. **Local clone**: `/tmp/hermes-backup` (SSH remote: `git@github.com:jiangfei1986WAR3/hermes123.git`). To push updates: `cd /tmp/hermes-backup && cp ~/.hermes/scripts/binance_executor.py scripts/ && git add -A && git commit -m "..." && git push origin main`. If `/tmp/hermes-backup` doesn't exist (reboot clears /tmp), re-clone: `git clone git@github.com:jiangfei1986WAR3/hermes123.git /tmp/hermes-backup`.
+7. **Local clone（2026-08-15 起迁至永久位置）**: `/root/hermes-backup`（SSH remote: `git@github.com:jiangfei1986WAR3/hermes123.git`）。**不要再用 `/tmp/hermes-backup`**——/tmp 是临时目录，服务器重启即清空（2026-08-15 实测：8-13 重启后 /tmp/hermes-backup 消失，仓库幸好已推 GitHub；用户以为是"被删了"，实际是系统行为）。re-clone: `git clone git@github.com:jiangfei1986WAR3/hermes123.git /root/hermes-backup`。
+   - ⚠️ **remote 必须用 SSH 格式**（`git@github.com:...`）。HTTPS 格式（`https://github.com/...`）push 会 `fatal: could not read Username`——本机无 credential helper/`.git-credentials`/GITHUB_TOKEN，但 id_ed25519 SSH key 已绑定 GitHub 账户可直推（2026-08-15 实测）。clone 时若误用 HTTPS URL，`git remote set-url origin git@github.com:...` 一行改回。
    - 重 clone 后 commit 前必须配身份(否则 `Author identity unknown`): `git config --global user.name jiangfei1986WAR3 && git config --global user.email jiangfei1986WAR3@users.noreply.github.com`
-   - commit 报 `invalid object ... Error building trees` = 本地对象库损坏(`git fsck` 见 broken link);fetch 补不齐,删掉重 clone 最干净(2026-08-06 例);推送只 `git add` 指定文件,勿 `add -A` 夹带无关变更(config 删除等假象,重 clone 后自愈)
+   - commit 报 `invalid object ... Error building trees` = 本地对象库损坏(`git fsck` 见 broken link);fetch 补不齐,删掉重 clone 最干净(2026-08-06 例)
 8. **Sanitized config backup**: `config/trading-config.example.json` in the repo has the full config structure with API keys replaced by placeholders (`YOUR_BINANCE_API_KEY_HERE`). `config/README.md` has restore instructions. To update after config changes: regenerate the example file with placeholders, never copy the real config.
-9. **推送纪律（2026-08-08）**：仓库是**快照**——内含过时 plan 文件、archive 脚本、技能库自动更新的文档，生产环境与仓库大量差异属常态。推送前先 `diff -rq /root/.hermes/<dir> /tmp/hermes-backup/<dir>` 摸清差异面，**只 `cp`+`git add` 本次有意修改的文件**；无关差异（技能自动 patch、plan 快照、Hermes 自带文件升级）不推，留待下次自然带上。commit message 写清修复内容+根因+影响面（例："fix: signal_monitor 硬校验空 rules 计划 — ...防死计划静默永不触发(HYPE 例)"）。
+9. **推送纪律（2026-08-08 定，2026-08-15 补全量重同步流程）**：仓库是**快照**——内含过时 plan 文件、archive 脚本、技能库自动更新的文档，生产环境与仓库大量差异属常态。推送前先 `diff -rq /root/.hermes/<dir> /root/hermes-backup/<dir>` 摸清差异面，**只 `cp`+`git add` 本次有意修改的文件**；无关差异（技能自动 patch、plan 快照、Hermes 自带文件升级）不推，留待下次自然带上。commit message 写清修复内容+根因+影响面（例："fix: signal_monitor 硬校验空 rules 计划 — ...防死计划静默永不触发(HYPE 例)"）。
+   - **长期未推后的全量重同步（2026-08-15 实例）**：先 `diff -rq` 出差异清单 → **先给用户看分类盘点、等用户明确说"推"才 push**（用户会要求"先告诉我改了什么、先不推送"）。盘点必须分类（核心代码/技能文档/脚本/plans），不能只报原始数字——用户会问"怎么有 146 项变更"：大头是 Hermes 官方内置技能随版本升级自动更新（productivity/creative/research/github 等，与交易无关），交易相关往往只有 ~10 项。全量同步命令：`rsync -a --exclude='__pycache__' --exclude='*.pyc' --exclude='.curator_backups' --exclude='*.bak*' ~/.hermes/skills/ /root/hermes-backup/skills/`（scripts/ 同理），再 git add -A + commit + push。rsync 不带 --delete（仓库多出的历史快照无害）。
+   - ⚠️ **空目录陷阱（2026-08-15 误报实例）**：git 不追踪空目录。对比顶层目录名（`diff <(ls repo) <(ls prod)`）会把生产里的**空壳目录**（如残留的 `skills/binance-executor/`，7-22 被合并后只剩空 scripts/ 子目录）显示为"新增技能"。**按文件数核实**（`find <dir> -type f | wc -l`）或 `git show --stat <commit> | grep <name>`，别信目录名 diff。查"某技能是什么/何时合并"用 `git log --oneline -- <path>` + `git show <commit>`。
 
 ## Known Unfixed Bugs (audit 2026-07-23, user explicitly deferred)
 
@@ -855,3 +861,4 @@ algo = get_open_algo_orders('NEARUSDT')
 ## Reference
 
 Read `references/system-architecture.md` for the full trigger-to-execution flow diagram, post-entry management, multi-symbol monitoring, file locations, and scanner data source details.
+Read `references/server-disaster-recovery.md` for server deployment topology (systemd unit / data paths), 阿里云镜像恢复语义（"老照片"陷阱 + 不随镜像走的项 + 恢复后体检清单）and 技能文档膨胀管理（20 万字节拆分阈值，用户已认可）。

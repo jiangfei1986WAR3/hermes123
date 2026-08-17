@@ -20,6 +20,7 @@ description: 查用户交易系统监控和持仓状态时用。例行检查命�
    signal_monitor 规则语义（给用户讲 plan 操作场景分支时，必须按源码实际行为讲，别把能力说得比代码强——用户会逐条质问"这些 plan 都包含吗"）：
    - `min_volume_ratio` =「量比≥1.0＝不低于前20根均量」，是"防缩量破位"的弱保护，**不是"放量"**（放量通常量比>1.5）。别用"放量触发"这个词
    - `evaluate_market_filter`（源码 156-181 行）用**实时 last**（last>MA25 且 last>open 且 volRatio≥配置），**非已收盘 close 确认**，会短线抖动误拦截；即"改 4h 收盘 close"待办升级点（暂缓未做）
+   - dry-run 输出 `WATCH: ...` 行（market_filter 评估记录）**不算不静默**：包装脚本 grep 只认 `ALERT|TRIGGER|EXPIRED|EVENT_WRITTEN|ERROR|WARNING`，WATCH 不入推送 → 可正常建 Cron。但它提示大盘过滤当前正在拦截（08-17 WLD 例：BTC 1h 放量下跌 → dry-run 报 `WATCH: 暂停WLD做多`，计划未失效，但大盘稳住前触发会被 filter 挡下——正是保护生效）
 6. 有变动时：查成交记录 + `grep <SYMBOL> ~/.hermes/trading-executor.log` 交叉验证。调用：`api_get('/fapi/v1/userTrades', {'limit': 10}, signed=True)`（binance_executor **没有** get_client，直接 import api_get）；`t['time']` 是毫秒需换算
 
 判断 plan 是否已开仓：plan.json 无 `actual_entry` 字段 = 未开仓（如 SOL 例）；state 文件为 `{}` = 该规则从未触发过；有 `actual_entry` 则开仓完成且 SL/TP 挂单应在位（`get_open_algo_orders` 应返回非空）
@@ -29,6 +30,7 @@ description: 查用户交易系统监控和持仓状态时用。例行检查命�
 | 现象 | 真相 |
 |------|------|
 | 挂单 SL/TP 价 ≠ plan 里的计划价 | executor 按**实际入场价平移**（滑点校准写回 plan），距离与原计划一致（如 1R/2R 保持）。正常 |
+| 挂单 SL/TP 价 == plan 价，且 plan 带 actual_entry/slippage | **校准已写回的正常态**（勿误判"没平移"）：开仓后 plan 的 stop_loss/TPs 已是平移后值，与挂单一致=校准完成。复原平移前值：日志"入场偏差检查通过: 偏差 X ≤ 止损距离 Y"→ 原止损=触发价−Y；"滑点校准…平移 +delta"→ 原值=现值−delta（HYPE 08-17：触发59.3、Y=1.1→原止损58.2，TP 60.47/62.0 平移+0.133→60.603/62.133）。等距平移→开仓后 R=创建时 R |
 | 日志大量"已有持仓，不重复开仓" | 开仓后监控 Cron 每冷却期（600s）重复检测到触发 → 安全门拦截。**正常**，证明 5 重门在工作 |
 | 查状态时 plan 文件不见了 | 止损/平仓后 executor 自动"删 plan + 撤残留挂单"（日志：`已清理计划文件`/`已撤销残留挂单`）。正常，不是错误 |
 | plan 没了但持仓/挂单还在 | 修复前=计划过期直接删 plan（XRP 08-08 例，过期只删 plan 文件，持仓与挂单保留）；**修复后：过期时有持仓 → plan 保留**（日志 `计划已过期但有活跃持仓，保留计划文件`），无持仓才删。仍见"过期+plan 没了+持仓在"=修复前遗留仓，建议手动补保本 SL |
@@ -47,7 +49,7 @@ description: 查用户交易系统监控和持仓状态时用。例行检查命�
 - `TP1_HIT` 事件分支（process_events ~753 行）全系统**无任何生成方**（signal_monitor 不写），死代码路径；移保本只走 manage 路径
 - 验证移保本是否生效：`get_open_algo_orders` 看 SL——成功=新 algoId、triggerPrice≈入场价、qty=剩余仓位；未执行=updateTime=createTime（从未被动过）
 - 区分"部分止盈通知"与"移保本"：日志 `🟡 部分止盈`（detect_position_changes，只通知不调单）≠ `止损移到保本 ... ✅`（manage_position，真正调单）
-- **断链漏洞已修（2026-08-08）**：PLAN_EXPIRED 分支（process_events ~762 行）改为先查持仓——**有持仓 → 保留 plan 文件**（与 INVALIDATION 分支一致），无持仓才删；平仓清理照旧删 plan，不留僵尸。副作用：plan 保留期间 signal_monitor 每分钟重复写 PLAN_EXPIRED 事件（executor 幂等处理、不通知、不碰交易），观察确认无害即可。语义：**过期=停止入场监控（signal_monitor 只写过期事件不再评估规则），持仓托管（移保本/通知/清理）持续到平仓**。实测：有持仓保留/无持仓删除两场景 PASS；测试技巧=构造 plan 时 SL/TP 写**不匹配现有挂单的价格**，manage_position 对它会静默无害，防止测试窗口误碰真实挂单
+- **断链漏洞已修（2026-08-08）**：PLAN_EXPIRED 分支（process_events ~762 行）改为先查持仓——**有持仓 → 保留 plan 文件**（与 INVALIDATION 分支一致），无持仓才删；平仓清理照旧删 plan，不留僵尸。副作用：plan 保留期间 signal_monitor 每分钟重复写 PLAN_EXPIRED 事件（executor 幂等处理、不通知、不碰交易），观察确认无害即可。**2026-08-16 实测补充**：该副作用并非无声——监控包装脚本（`*-monitor-check.sh`）grep 到 EXPIRED 行 → no_agent Cron 非空 stdout → 每分钟尝试推微信 → 触发 iLink 限流（30s cooldown，挤占真实通知配额）。处置：过期后该币价格监控 Cron 已无入场监控职责，可停用（**保留 plan 文件**——持仓托管由事件处理 Cron 的 manage 负责，不受影响）。语义：**过期=停止入场监控（signal_monitor 只写过期事件不再评估规则），持仓托管（移保本/通知/清理）持续到平仓**。实测：有持仓保留/无持仓删除两场景 PASS；测试技巧=构造 plan 时 SL/TP 写**不匹配现有挂单的价格**，manage_position 对它会静默无害，防止测试窗口误碰真实挂单。**停用后验证托管链（08-17 XRP 例，用户会问"停了监控持仓没人管吗"）**：① `grep -n "def manage_all_positions" binance_executor.py` → 815 行起遍历 PLANS_DIR 所有 `*-plan.json`，plan 文件在=该币被照管；② 手动跑 `python3 binance_executor.py manage` 返回 `[]` = 正常覆盖、TP1 未到、无待办动作。事件处理 Cron 的限流报错在监控 Cron 停用后**自然消失**（EXPIRED 源头没了，trading-cron.sh 输出回空）；若停用后仍报限流=另有输出源，需另查。回答用户口径：入场监控（signal_monitor）与持仓托管（trading-cron.sh→manage）是**两条独立链**；SL/TP 是交易所条件单，独立于本地进程执行；停用只停"入场监控+过期刷屏"
 - 手动补保本 SL（用户要求时）：`api_delete('/fapi/v1/algoOrder', {'symbol':S,'algoId':旧SL algoId})` 撤旧 → `_place_conditional_order(S, 'BUY', 'STOP_MARKET', stop_price=round_price(S, 入场价), quantity=剩余, position_side='SHORT')` 挂新（XRP 08-08 例：撤 96.2@1.0523 → 挂 48.1@1.0368）
 
 ## 持仓变动必须交叉验证（勿单看持仓数量下结论）
@@ -91,6 +93,41 @@ description: 查用户交易系统监控和持仓状态时用。例行检查命�
 `~/.hermes/scripts/` 下无 Cron 调用、无 plan 的 `*-monitor-check.sh` = 死文件（脚本第一行 `[ ! -f "$PLAN" ] && exit 0` 自我保护，不会误触发）。清监控时脚本、plan、state、事件、Cron 五样一起清。
 
 ⚠️ **止损自动清理 ≠ 全清**：executor 止损/平仓后只删 plan.json + 事件 + 撤销挂单，**残留** state 文件 + 监控脚本 + 监控 Cron（ENA 08-08 例：止损后 state/脚本/Cron 仍在，用户要求清监控时手动补删）。故止损平仓 ≠ 清监控，两者要分清。**失效(invalidation)清理同理**：AAVE 08-11 例——涨破失效线 88.85 触发 invalid_8885，未开仓零成本出局，plan 被删但 state+Cron 残留（无害静默，可按需补清）
+
+## 跨窗口/跨渠道结论对照（用户说"另一边结果不一样"时）
+
+用户习惯微信/Web/TUI 多端对照。发现两端结论不一致时，先查证再归因，禁先辩护：
+
+1. **先找另一边的记录**：`session_search` 发现模式——query 用"扫描 计划 达标"/"扫描 机会 计划"，`sort=newest`；browse 找最近活跃会话；再 `around_message_id` scroll 逐段还原：扫描时间、建了什么计划、用户后续动作（含删除）。超大结果持久化到 `/tmp/hermes-results/*.txt`，用 python `json.load` 提取 user/assistant 摘要再读。
+2. **并排对比表**：两边扫描时间、大盘判断、每候选判定与计划，一列一边（脚本生成防错位）。
+3. **根因三分类（诚实归因，优先认自己的问题）**：
+   - 行情位移：两次扫描时间不同，RSI/价格已变，同一规则下结论自然不同
+   - 会话隔离：各窗口聊天记录互不相通（memory/技能共享、聊天记录不共享）——另一窗口建/删过计划而本窗口不知道是正常的，如实说"当时不知道"
+   - 自己漏了评估档：当场承认漏了哪一步（8-16 例：只验直接破位空、没验反抽空档），并立刻补验
+4. **"不是 BUG"要用证据说**：确定性规则（禁手/R 门槛/大盘过滤）两边判定一致 = 系统没坏，才能说；禁止空口安慰。
+5. **不重建用户刚在另一窗口删掉的计划**：先问，不自作主张。
+6. **持仓 plan 的 R 门槛溯源**：发现持仓币 TP1 R<1.2R 时，先溯源建 plan 的会话（session_search 币名 → scroll 长会话至 plan created_at 时刻）查当时 R 计算原文再下结论；两种读法（机械 1.2R 门槛 / ZEC 先例"TP1 对齐第一阻力时非机械 1.2R、TP1 距≥止损距即可"）都摆给用户定口径，禁自行替用户判定（08-17 例：同日 TUI 00:50 否 WLD 1.03R、微信 12:16 放 HYPE 1.06R"压线"）。见 `references/cross-channel-reconciliation.md` 08-17 段
+
+完整案例（8-16 两窗口 NEAR/DOGE 反抽空对比 + session_search 检索技巧）见 `references/cross-channel-reconciliation.md`。
+
+## 流程完整性质疑应对（用户问"是不是偷懒跳过环节"）
+
+用户会质疑"这轮跑得快/输出短=跳了环节"（8-16 已是第三次）。禁止空口保证，用证据回答：
+
+1. 立即列本轮时间线：每步产出物自带时间戳（扫描文件名带时间、fetch_klines 输出"分析时间"、dry-run 的 UTC 时间戳、Cron ID、plan mtime）
+2. 环节清单逐项对照：启动前检查 → 深扫（列全参数）→ 读结果 → fetch_klines（脚本在 `~/.hermes/skills/trading-analysis/scripts/`；`--json` 输出=**顶层 list**，每周期**扁平键** `current_price/ma7/ma25/ma99/macd_dif/macd_dea/macd_hist/rsi/rsi_state/boll_upper|middle|lower/atr/support_resistance/recent_candles`，勿按嵌套 `close/ma/macd` 字典猜字段名，会读出全 None 浪费调用）→ 禁手检查 → R 预检 → plan → dry-run → 脚本 → Cron
+3. 速度合法来源说清：**同会话内前几轮已加载过的技能/参考文档可复用**——省的是文件读取时间，不是分析环节；候选币数差异、API 响应快慢也是因素。用户要求每轮强制重读技能文件时照做（多 2-3 分钟），由用户拍板
+4. 若真漏了某步（只验一档触发位/漏反抽空档），当场承认+立刻补验，不混在"速度快"里蒙混
+
+## 自动补丁通知解释（用户问"Self-improvement review: Patched SKILL.md 这是什么"）
+
+用户看到自我改进 review 自动 patch 技能的通知时，会问机制/改了什么。应对：
+
+1. 查证改动：`ls -la` 看 SKILL.md mtime；再 diff 备份仓库 `/root/hermes-backup` 同名文件（备份=上一快照，diff 即本次改动全量；git status 干净说明备份未同步，正说明改动是 live 目录新发生的）
+2. 影响面分层：执行代码（executor/monitor/cron）零改动（mtime 不变）vs 技能文档只影响未来会话的分析/回答；规则阈值未被改
+3. 逐条核对 diff 与近期对话一致（防夹带私货），引用对话里的具体数据佐证（开仓价/滑点/案例日期）
+4. 提示：改动未进 git 备份仓库，push 前须用户说"推"才 push（用户惯例）
+5. 机制定位：正是"只碰技能文档、不碰执行代码"的补丁动作——与用户之前"会不会偷偷改代码"的关切直接对应
 
 ## 复盘/规则建议产出
 
