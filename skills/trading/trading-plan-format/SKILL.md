@@ -42,6 +42,10 @@ signal_monitor.py 的 `rules[].type` 只有以下 4 种，其他任何写法都�
 
 - 规则字段（全在规则内）：`pullback_low/pullback_high/reclaim_price/invalidation_price` + `side` + `timeframe`；`require_close` 对 reclaim 判定无效——`reclaimed = 实时价 last ≥ reclaim 或 15m 已收盘 close ≥ reclaim`，实时摸到 reclaim 即触发
 - `had_pullback`（做多）：closes20 里"最早收盘 ≥ reclaim 之后出现过收盘 < reclaim"才算真回踩，直接路过不触发（dry-run 静默的依据）
+- `touched_zone`（源码）：`low20 <= pullback_high and high20 >= pullback_low`——近20根K线窗口内低/高触碰过区即算，**不是"当前价在区内"**。回踩/反抽发生在最近20根内（15m×20=5小时）→ 同参数重建大概率仍非静默，需换更深的区或等窗口滑出
+- **深回踩静默构造（08-18 SOL 例 ✅）**：把 pullback 区设在 low20 最低点**之下**（近20根尚未触及的位置）→ touched_zone=False 强制静默，价格真回踩进区后才激活。SOL：现价 75.93、low20 最低 75.59 → 区设 75.30-75.45 → dry-run 静默 → 建 Cron 成功。选浅区（已被触及，靠 reclaimed=False 静默）还是深区（touched_zone=False 强制静默）取决于想等的回踩深度
+- **"机会已完成"删计划后，若按现价追入 R 仍达标**（01:12 FIL 例：现价追入止损不变 TP1 仍 1.6R）：把"换参数重建可追"的选择权交给用户并给现价追入 R 数字，不自动建、不劝；用户答"算了不凑数"=接受放弃（用户定调 08-18）
+- `reclaimed` 用 `lastClosedClose`（最近**已收盘**K线收盘价，未收盘K不算）：当前K线未收盘大跌时，上一根已收盘K仍可能满足 reclaimed → dry-run 瞬时 ALERT，当前K收盘后信号消失（2026-08-18 LINK 例：01:00 未收盘跌至 9.488 但 00:45 已收盘 9.558≥9.51 → 触发；FIL 例已收盘持久满足=机会真已完成）。dry-run 非静默先看当前K是否已收盘，再分"瞬时态"vs"机会已完成"（后者按验证拦截规则删）
 - ⚠️ 规则内 invalidation_price 只在 pullback_reclaim 自身评估时检查：价格直接暴跌穿过失效线、未经历回踩流程时**不写任何事件**，plan 挂着不失效 → 回踩计划必须**额外加一条独立 invalidation 规则**兜底（LINK 例：规则内失效 9.20 + 独立 `invalidation` 9.20 below require_close=false 双保险）
 
 ### 空头镜像：反抽受阻空（2026-08-16 SUI 例 ✅）

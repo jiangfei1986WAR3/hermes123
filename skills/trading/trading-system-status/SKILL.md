@@ -115,7 +115,7 @@ description: 查用户交易系统监控和持仓状态时用。例行检查命�
 用户会质疑"这轮跑得快/输出短=跳了环节"（8-16 已是第三次）。禁止空口保证，用证据回答：
 
 1. 立即列本轮时间线：每步产出物自带时间戳（扫描文件名带时间、fetch_klines 输出"分析时间"、dry-run 的 UTC 时间戳、Cron ID、plan mtime）
-2. 环节清单逐项对照：启动前检查 → 深扫（列全参数）→ 读结果 → fetch_klines（脚本在 `~/.hermes/skills/trading-analysis/scripts/`；`--json` 输出=**顶层 list**，每周期**扁平键** `current_price/ma7/ma25/ma99/macd_dif/macd_dea/macd_hist/rsi/rsi_state/boll_upper|middle|lower/atr/support_resistance/recent_candles`，勿按嵌套 `close/ma/macd` 字典猜字段名，会读出全 None 浪费调用）→ 禁手检查 → R 预检 → plan → dry-run → 脚本 → Cron
+2. 环节清单逐项对照：启动前检查 → 深扫（列全参数）→ 读结果 → fetch_klines（脚本在 `~/.hermes/skills/trading-analysis/scripts/`；`--json` 输出=**顶层 list**（[{symbol, analysis_time, timeframes:{15m,1h,4h,1d}, ticker_24h, funding, open_interest}]），每周期**扁平键** `current_price/ma7/ma25/ma99/ma_state/macd_dif/macd_dea/macd_hist/rsi/rsi_state/boll_upper|middle|lower/atr`，勿按嵌套 `close/ma/macd` 字典猜字段名，会读出全 None 浪费调用。⚠️ json 模式**缺**量比/主动买盘/支撑阻力/K线形态/区间高低（08-17 实测全 None）——完整分析须用**文本模式**（重定向 /tmp 文件，terminal `sed -n` 分段读，绕开 read_file 的 ANSI binary 判定））→ 禁手检查 → R 预检 → plan → dry-run → 脚本 → Cron
 3. 速度合法来源说清：**同会话内前几轮已加载过的技能/参考文档可复用**——省的是文件读取时间，不是分析环节；候选币数差异、API 响应快慢也是因素。用户要求每轮强制重读技能文件时照做（多 2-3 分钟），由用户拍板
 4. 若真漏了某步（只验一档触发位/漏反抽空档），当场承认+立刻补验，不混在"速度快"里蒙混
 

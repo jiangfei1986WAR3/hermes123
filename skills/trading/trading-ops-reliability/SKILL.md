@@ -249,6 +249,7 @@ If validation fails, regenerate the plan with the full `rules` array. Do NOT dep
 - 正确构造"等反弹到位再触发"的空单：`pullback_low/high` 设在最近20根K线区间**之上**（touched_zone=false 保持静默，价格真反弹进区后才激活）
 - pullback_reclaim 不走 `require_close`（用 last/lastClosedClose 双通道），别依赖 require_close 字段控制它
 - ⚠️ "构造正确"≠必静默：**dry-run 是唯一裁判**，任何"应该静默"的预期都以 dry-run 输出为准；镜像陷阱两个方向都存在（现价高于 reclaim=追高，低于=追空）
+- **建计划前的历史回踩也算数（2026-08-18 LINK 例）**：had_pullback 读 closes20 历史序列，不区分回踩发生在建计划前/后。建计划前 20 根 K 线内已有"收盘≥reclaim→收盘<reclaim"循环、且建计划时现价已收复 reclaim → dry-run 立即 ALERT（LINK：21:00 收 9.486 已回踩，00:08 建计划时 9.518 收复 → 触发）。非引擎 bug——是计划诞生晚了、回踩机会已实现；此时按现价追入 R 常缩水至 <1.2R（9.518 追 TP1 9.63 仅 1.14R）。处置：按验证拦截规则删计划；等价格再次落回 pullback 区再重建才有意义
 
 ## fetch_klines.py 输出含 ANSI 色码 → read_file 判定 binary（2026-08-06）
 
@@ -291,6 +292,7 @@ sed -n '111,321p' /tmp/kl.txt   # 其余
    - commit 报 `invalid object ... Error building trees` = 本地对象库损坏，删掉重 clone 最干净
 8. **Sanitized config backup**: `config/trading-config.example.json`（API key 用占位符）。改配置后重新生成 example，never copy the real config.
 9. **推送纪律**：仓库是**快照**——含过时 plan、archive 脚本、技能自动更新的文档，生产与仓库大量差异属常态。推送前先 `diff -rq /root/.hermes/<dir> /root/hermes-backup/<dir>` 摸清差异面，**只 cp+git add 本次有意修改的文件**；无关差异留待下次自然带上。commit message 写清修复内容+根因+影响面。
+   - **推送内容三档分类（08-18 实践，用户问"推送哪些合适"时照此答）**：①必推——新技能（唯一副本在 live，丢了就没了）、技能文档补丁（实战教训）、新监控脚本；②顺带推——**持仓中币的 plan.json**（含 actual_entry 校准记录，是持仓托管依据，服务器恢复时让移保本/通知链继续工作；推一次=快照，之后移保本写回有差异属正常）；③不推——`*-plan.state.json`（瞬时状态每分钟可变，无快照价值）、历史遗留死脚本（备份已有，不重复动）。盘点时给用户"必推/顺带推/不推"三档清单让用户拍板
    - **长期未推后的全量重同步**：先 `diff -rq` 出差异清单 → **先给用户看分类盘点、等用户明确说"推"才 push**。盘点必须分类（核心代码/技能文档/脚本/plans），不能只报原始数字——大头常是 Hermes 官方内置技能随版本升级自动更新（与交易无关）。全量同步：`rsync -a --exclude='__pycache__' --exclude='*.pyc' --exclude='.curator_backups' --exclude='*.bak*' ~/.hermes/skills/ /root/hermes-backup/skills/`（scripts/ 同理），再 git add -A + commit + push。rsync 不带 --delete（仓库多出的历史快照无害）
    - ⚠️ **空目录陷阱**：git 不追踪空目录。对比顶层目录名会把生产里的**空壳目录**显示为"新增技能"。**按文件数核实**（`find <dir> -type f | wc -l`）或 `git show --stat <commit> | grep <name>`。查"某技能是什么/何时合并"用 `git log --oneline -- <path>` + `git show <commit>`
 
