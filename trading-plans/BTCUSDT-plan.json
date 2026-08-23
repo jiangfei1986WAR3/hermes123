@@ -1,0 +1,91 @@
+{
+  "name": "BTC突破77591做多",
+  "symbol": "BTCUSDT",
+  "direction": "long",
+  "setup_type": "breakout_long",
+  "status": "PLAN_READY",
+  "created_at": "2026-08-23T18:25:00+08:00",
+  "expires_at": "2026-08-24T18:25:00+08:00",
+  "market_filter_symbols": [
+    "BTCUSDT",
+    "ETHUSDT"
+  ],
+  "intervals": [
+    "15m",
+    "1h"
+  ],
+  "cooldown_seconds": 600,
+  "alerts": {
+    "sound": "beep",
+    "speech": false,
+    "wav_path": null
+  },
+  "entry": {
+    "order_type": "STOP_MARKET",
+    "trigger_price": 77591.0,
+    "limit_price": null
+  },
+  "entry_trigger": 77591.0,
+  "stop_loss": 76867.1,
+  "take_profits": [
+    {
+      "price": 78928.1,
+      "reduce_percent": 50
+    },
+    {
+      "price": 79652.1,
+      "reduce_percent": 50
+    }
+  ],
+  "risk": {
+    "margin_usdt": 10,
+    "leverage": 20
+  },
+  "monitor": {
+    "trigger_condition": "15m收盘站上77591（4h回调高点77590.6上方），放量突破做多",
+    "min_volume_ratio": 1.0,
+    "invalidation_condition": "实时价跌破75550（1h低点75588下方），多头逻辑失效",
+    "market_filter": "BTC/ETH不出现放量强势下跌",
+    "expires_after": "24h"
+  },
+  "rules": [
+    {
+      "id": "breakout_77591",
+      "level": "ALERT",
+      "type": "breakout",
+      "side": "above",
+      "price": 77591.0,
+      "timeframe": "15m",
+      "require_close": true,
+      "min_volume_ratio": 1.0,
+      "message": "BTC 15m收盘站上77591，突破做多触发"
+    },
+    {
+      "id": "invalidation_75550",
+      "level": "ALERT",
+      "type": "invalidation",
+      "side": "below",
+      "price": 75550.0,
+      "timeframe": "15m",
+      "require_close": false,
+      "message": "BTC跌破75550（1h低点下方），多头逻辑失效"
+    },
+    {
+      "id": "market_filter",
+      "level": "WATCH",
+      "type": "market_filter",
+      "symbols": [
+        "BTCUSDT",
+        "ETHUSDT"
+      ],
+      "timeframes": [
+        "15m",
+        "1h"
+      ],
+      "min_volume_ratio": 1.2,
+      "message": "BTC/ETH放量强势下跌，暂停BTC做多"
+    }
+  ],
+  "actual_entry": 77688.1,
+  "slippage": 97.10000000000582
+}

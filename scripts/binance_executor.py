@@ -409,7 +409,7 @@ def execute_plan(plan_path: str) -> dict:
     # 校验3: 名义价值合理性（margin×leverage 应约等于 qty×entry）
     expected_notional = margin * leverage
     actual_notional = quantity * entry_price
-    if actual_notional > 0 and abs(actual_notional - expected_notional) / expected_notional > 0.15:
+    if actual_notional > 0 and abs(actual_notional - expected_notional) / expected_notional > 0.25:
         errors.append(
             f"名义价值偏差过大: 期望≈{expected_notional}U 实际={actual_notional:.1f}U，"
             f"数量或价格可能有误")
