@@ -4,7 +4,7 @@
 
 ## 快照对比循环
 
-`binance_executor.py watch` compares current positions against a saved snapshot (`~/.hermes/trading-state.json`)，每 ≈2 分钟跑一次（trading-cron.sh step 3；配置 every 1m 实际 ≈2m）：
+`binance_executor.py watch` compares current positions against a saved snapshot (`~/.hermes/trading-state.json`)，每 **60 秒**跑一次（trading-cron.sh step 3；schedule `* * * * *`。2026-08-25 前用 `every 1m` 时实际 ≈2 分钟，那是 interval 型锚点错位导致的 2 倍空转，已修）：
 
 ```
 ① Query current positions from Binance API

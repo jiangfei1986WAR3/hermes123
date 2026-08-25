@@ -52,10 +52,11 @@ If Hermes crashes, server shuts down, all Crons stop:
 
 Each symbol gets its own independent Cron + plan file:
 ```
-Cron every 1m: btc-monitor-check.sh   → reads BTCUSDT-plan.json
-Cron every 1m: eth-monitor-check.sh   → reads ETHUSDT-plan.json
-Cron every 1m (≈2m actual): trading-cron.sh → processes all events + manages all positions
+Cron `* * * * *`: btc-monitor-check.sh   → reads BTCUSDT-plan.json
+Cron `* * * * *`: eth-monitor-check.sh   → reads ETHUSDT-plan.json
+Cron `* * * * *`: trading-cron.sh → processes all events + manages all positions
 ```
+⚠️ Schedules use the 5-field cron `* * * * *` (true 60s). `every 1m` idles every other tick and actually runs at 120s — fixed 2026-08-25, root cause in trading-system-status `references/cron-cadence-and-latency.md`.
 
 Up to 6 positions can be open at a time (max_positions=6 config). If 6 positions are already open, a 7th trigger is rejected until one closes.
 

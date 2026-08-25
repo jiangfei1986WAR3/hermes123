@@ -28,7 +28,7 @@ The user prefers quality over speed for opportunity discovery. Unless the user e
 plan 文件 (~/.hermes/trading-plans/<SYMBOL>-plan.json)
   → signal_monitor.py（Cron 每分钟检测价格）
   → 触发后写事件
-  → trading-cron.sh（Cron 每1分钟≈实际2分钟）
+  → trading-cron.sh（Cron 每分钟，schedule 必须写 `* * * * *`）
   → binance_executor.py（5重安全门自动下单）
   → 通知用户
 ```
@@ -38,7 +38,7 @@ plan 文件 (~/.hermes/trading-plans/<SYMBOL>-plan.json)
 - 监控脚本：`~/.hermes/scripts/<symbol>-monitor-check.sh`
 - 监控引擎：`~/.hermes/skills/auto-signal-monitor/scripts/signal_monitor.py`
 - 执行器：`~/.hermes/scripts/binance_executor.py`（5门：仓位检查、金额上限、杠杆限制、重复单、隔离模式）
-- 事件处理 Cron：`trading-cron.sh`（配置1m≈实际2分钟，处理开仓/TP1/过期）
+- 事件处理 Cron：`trading-cron.sh`（schedule `* * * * *`＝真 60s，处理开仓/TP1/过期）
 - 持仓管理：同一 Cron 内 manage 子命令
 
 因此：生成 plan 文件 + 建监控 Cron = 接入自动执行链路。不要输出"仅通知不下单"或"手动确认"的提示。执行器自带安全保障。
@@ -194,8 +194,8 @@ Use when a plan has concrete entry, stop, target, and risk fields.
    - 静默 → 继续下一步
    - 回踩/失效类不静默 → 删计划文件 + 删事件文件 → 终止，告知用户
    - 突破类不静默 → 正常继续（触发是预期行为）
-4. Create monitoring Cron (every 1m, no_agent=true, script mode).
-5. 检查事件处理Cron（trading-cron.sh）是否在Cron列表中，不在则创建（every 1m, no_agent=true, deliver=all；⚠️调度器实际节奏≈配置+1分钟：1m配置≈实际2分钟，2m配置≈实际3分钟，2026-08-04实测）。
+4. Create monitoring Cron (schedule `* * * * *`, no_agent=true, script mode)。⚠️ **禁用 `every 1m`**：interval 型 schedule 有 0.4s 锚点错位，实测每轮空转、实际 120s 才跑一次（2026-08-25 实测+修复，根因见 trading-system-status `references/cron-cadence-and-latency.md`）。`* * * * *` 对齐整分钟边界＝真 60s。
+5. 检查事件处理Cron（trading-cron.sh）是否在Cron列表中，不在则创建（schedule `* * * * *`, no_agent=true, deliver=all）。已存在但 schedule 是 `every 1m` → 用 `hermes cron edit <id> --schedule '* * * * *'` 改掉（只改 schedule，script/no_agent/deliver 等字段自动保留）。
 6. 监控触发后由 binance_executor.py 自动执行，无需人工确认。
 
 ### TRIGGERED: Revalidate Before Execution

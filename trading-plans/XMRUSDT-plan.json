@@ -1,13 +1,19 @@
 {
-  "name": "XMR突破403.16做多",
+  "name": "XMR突破436做多",
   "symbol": "XMRUSDT",
   "direction": "long",
   "setup_type": "breakout_long",
   "status": "PLAN_READY",
-  "created_at": "2026-08-15T09:42:00+08:00",
-  "expires_at": "2026-08-15T21:42:00+08:00",
-  "market_filter_symbols": ["BTCUSDT", "ETHUSDT"],
-  "intervals": ["15m", "1h"],
+  "created_at": "2026-08-25T02:15:00+08:00",
+  "expires_at": "2026-08-26T02:15:00+08:00",
+  "market_filter_symbols": [
+    "BTCUSDT",
+    "ETHUSDT"
+  ],
+  "intervals": [
+    "15m",
+    "1h"
+  ],
   "cooldown_seconds": 600,
   "alerts": {
     "sound": "beep",
@@ -16,62 +22,71 @@
   },
   "entry": {
     "order_type": "STOP_MARKET",
-    "trigger_price": 403.16,
+    "trigger_price": 436.0,
     "limit_price": null
   },
-  "entry_trigger": 403.16,
-  "stop_loss": 398.4,
+  "entry_trigger": 436.0,
+  "stop_loss": 429.78,
   "take_profits": [
     {
-      "price": 408.97,
+      "price": 471.68,
       "reduce_percent": 50
     },
     {
-      "price": 414.73,
+      "price": 485.28,
       "reduce_percent": 50
     }
   ],
   "risk": {
     "margin_usdt": 10,
-    "leverage": 10
+    "leverage": 10,
+    "quantity": 0.229
   },
   "monitor": {
-    "trigger_condition": "15m收盘站上403.16（24h高点），放量突破做多",
+    "trigger_condition": "15m收盘站上436.0（24h高点上方），放量突破做多",
     "min_volume_ratio": 1.0,
-    "invalidation_condition": "实时价跌破398.40（1h结构低点398.34下方），多头逻辑失效",
-    "market_filter": "BTC/ETH不出现放量强势下跌",
-    "expires_after": "12h"
+    "invalidation_condition": "15m close < 424.5（15m支撑下方，多头逻辑失效）",
+    "market_filter": "BTC/ETH不出现强势下跌",
+    "expires_after": "24h"
   },
   "rules": [
     {
-      "id": "breakout_40316",
+      "id": "breakout_4360",
       "level": "ALERT",
       "type": "breakout",
       "side": "above",
-      "price": 403.16,
+      "price": 436.0,
       "timeframe": "15m",
       "require_close": true,
       "min_volume_ratio": 1.0,
-      "message": "XMR 15m收盘站上403.16，突破做多触发"
+      "message": "XMR 15m放量收盘站上436.0，突破做多触发"
     },
     {
-      "id": "invalidation_39840",
+      "id": "invalidation_4245",
       "level": "ALERT",
       "type": "invalidation",
       "side": "below",
-      "price": 398.4,
+      "price": 424.5,
       "timeframe": "15m",
-      "require_close": false,
-      "message": "XMR跌破398.40（1h结构低点下方），多头逻辑失效"
+      "require_close": true,
+      "message": "XMR跌破424.5（15m支撑），多头逻辑失效"
     },
     {
       "id": "market_filter",
       "level": "WATCH",
       "type": "market_filter",
-      "symbols": ["BTCUSDT", "ETHUSDT"],
-      "timeframes": ["15m", "1h"],
+      "symbols": [
+        "BTCUSDT",
+        "ETHUSDT"
+      ],
+      "timeframes": [
+        "15m",
+        "1h"
+      ],
       "min_volume_ratio": 1.2,
-      "message": "BTC/ETH放量强势下跌，暂停XMR做多"
+      "message": "BTC/ETH强势下跌，暂停XMR做多"
     }
-  ]
+  ],
+  "actual_entry": 441.28000000000003,
+  "slippage": 5.28000000000003
 }

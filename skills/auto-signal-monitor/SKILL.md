@@ -75,9 +75,11 @@ fi
 3. 创建 Cron：
 
 ```
-cronjob action=create name="<SYMBOL> 价格监控" schedule="every 1m"
+cronjob action=create name="<SYMBOL> 价格监控" schedule="* * * * *"
   script="<symbol>-monitor-check.sh" no_agent=true deliver=all
 ```
+
+⚠️ **schedule 必须写 5 字段 cron `* * * * *`，禁写 `every 1m`**：interval 型 schedule 的 next_run 锚在"执行完成时刻"（比 tick 起点晚 ~0.55s），而 ticker 每轮只多走 0.07s → 每轮差 ~0.4s 判定未到期 → 100% 必然空转，实测 `every 1m` 真实间隔 **120s**（慢一倍）。`* * * * *` 由 croniter 吸附到整分钟边界，比 tick 早 13s → 每轮必点火＝真 60s。2026-08-25 实测+修复，根因见 trading-system-status `references/cron-cadence-and-latency.md`。
 
 4. 验证：`bash ~/.hermes/scripts/<symbol>-monitor-check.sh`，未触发时应无输出（静默）
 

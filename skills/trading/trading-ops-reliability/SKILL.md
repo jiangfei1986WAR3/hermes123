@@ -13,7 +13,7 @@ description: Operational reliability patterns for the user's live crypto trading
 
 - **NEVER** use `terminal(background=true)` or nohup for long-running price monitors. They are session-scoped — closing the web page, disconnecting WeChat, or ending the TUI session kills them silently.
 - **ALWAYS** use Hermes Cron (`no_agent=true`, script mode) for monitoring. Cron is managed by the daemon and survives all session closures.
-- Pattern: create a wrapper script (`~/.hermes/scripts/<symbol>-monitor-check.sh`) that runs `signal_monitor.py` in single-shot mode, filters DONT_NOTIFY lines, and only outputs on ALERT/TRIGGER/EXPIRED/**EVENT_WRITTEN**. Then create a Cron with `schedule="every 1m"`, `no_agent=true`, `deliver=all`.
+- Pattern: create a wrapper script (`~/.hermes/scripts/<symbol>-monitor-check.sh`) that runs `signal_monitor.py` in single-shot mode, filters DONT_NOTIFY lines, and only outputs on ALERT/TRIGGER/EXPIRED/**EVENT_WRITTEN**. Then create a Cron with `schedule="* * * * *"`, `no_agent=true`, `deliver=all`. **⚠️ Use the 5-field cron `* * * * *`, NOT `every 1m`** — interval-type schedules idle every other tick and actually run at 120s (see the cadence entry below).
 - **⚠️ Verification/validation runs MUST use `--dry-run`**: `signal_monitor.py --plan <plan> --dry-run` evaluates but writes NO event files and NO state. Running it WITHOUT `--dry-run` for a "check" writes real TRIGGER events → executor opens a real position the user never asked for (BNB 08-03 实亏、XLM 08-05 复发，均见 incident-log). **验证 = 只跑 `--dry-run` 一条命令；monitor-check.sh 是生产通道，验证阶段碰都不碰。**
 - **⚠️ grep MUST include `EVENT_WRITTEN`**: `grep -qiE "ALERT|TRIGGER|EXPIRED|EVENT_WRITTEN|ERROR|WARNING"`. Without it, the event-file-written confirmation line is swallowed.
 - **⚠️ NEVER overwrite existing monitor-check.sh with `write_file`**: check `[ -f ... ]` first. If the file exists, it may contain fixes newer than the skill template. Only create from template when the file does NOT exist.
@@ -23,7 +23,8 @@ description: Operational reliability patterns for the user's live crypto trading
 ### Cron 频率修改验证与描述同步（2026-08-04 实测）
 
 - 改 Cron schedule 后**必须实测验证实际节奏**：看 `~/.hermes/cron/output/<job_id>/` 输出文件时间戳序列（连续 3+ 个文件间隔是否稳定），不能只信 `cronjob list` 的 next_run/last_run——那只是调度器视图。
-- 实测规律：no_agent 脚本 job **实际节奏 ≈ 配置 + 1 分钟**（every 1m→实际 2m）。一切延迟上限按实际节奏计算，不按配置值。
+- **schedule 类型决定真实节奏（2026-08-25 实测定根因 + 已修）**：`every 1m`（interval 型）实测真实间隔 **120s**，慢一倍且是 100% 必然空转——`compute_next_run` 把 next_run 锚在 `last_run_at`（=**执行完成**时刻，比 tick 起点晚 ~0.55s），而 ticker 周期实测 60.07s（每轮只多走 0.07s）→ 下一个 tick 永远差 ~0.4s 判定"未到期" → 跳过 → 120s。修法：schedule 改 5 字段 cron **`* * * * *`**，croniter 吸附到整分钟边界（比 tick 早 13s）→ 每轮必点火＝真 60s。**旧结论「实际节奏 ≈ 配置 + 1 分钟」是把这个 bug 当固有特性的误判，已作废。** 详见 trading-system-status `references/cron-cadence-and-latency.md`
+- 秒级粒度物理不可达：`parse_duration` 无秒单位（`every 30s` 直接 ValueError），且 `TICKER_INTERVAL_SECONDS = 60` 无配置项可覆盖 → 每 tick 最多点火一次，60s 是硬下限。
 - 频率加密安全前提：脚本耗时 << 周期（trading-cron 三步实测 0.556s）+ 操作幂等。满足则频率变化零风险、可一行回退。
 - 频率与微信限流**无关**：iLink 限流看"发送次数"（事件时才输出），不看"检查次数"。
 - 改频率后全库同步旧描述（中英文都搜：`每2分钟|every 2m|every 2 minutes|[23] minutes|3分钟|3-4 分钟`，覆盖 trading-command-center、trading-ops-reliability(+references/)、binance-executor、trading-cron.sh、binance_executor.py——脚本注释也算）。甄别三类命中：①过时描述→改；②**历史记录（bug/incident 描述）→不改**；③**规律说明→不改**。改完 `bash -n`/`py_compile` + 实跑一次 + 再 grep 复查 + 推 GitHub。
@@ -40,7 +41,7 @@ description: Operational reliability patterns for the user's live crypto trading
 
 ### Diagnostic Rule
 - If `pgrep -af "signal_monitor"` returns a process AND `cronjob action=list` shows a monitor Cron for the same symbol → **the background process is stale/wrong**. Kill it, do NOT report "monitoring is running normally" based on the background process. The Cron is the source of truth.
-- **Cron 全部消失时的诊断**：`cronjob list` 返回 0 个 job 时，用 `ls -la ~/.hermes/cron/` 看 `jobs.json`（空列表 68 字节）和 `executions.db` 的 mtime 推断清空时刻，再 `session_search` 找执行者（用户可能在其他会话执行了"清空所有监控和计划"——包括 trading-cron）。**trading-cron 也被删时**：若空仓+按用户计划"清仓后清空监控"则属预期，下次找机会时按新参数重建；若用户不知情需追查。重建用 `schedule="every 1m"`，建后等 2-3 个 tick 看 output 目录时间戳验证节奏。
+- **Cron 全部消失时的诊断**：`cronjob list` 返回 0 个 job 时，用 `ls -la ~/.hermes/cron/` 看 `jobs.json`（空列表 68 字节）和 `executions.db` 的 mtime 推断清空时刻，再 `session_search` 找执行者（用户可能在其他会话执行了"清空所有监控和计划"——包括 trading-cron）。**trading-cron 也被删时**：若空仓+按用户计划"清仓后清空监控"则属预期，下次找机会时按新参数重建；若用户不知情需追查。重建用 `schedule="* * * * *"`（**禁用 `every 1m`**，见上节节奏根因），建后等 2-3 个 tick 看 output 目录时间戳验证节奏（应稳定 60s，不是 120s）。
 
 ## 分析流程完整性：trading-analysis 全量加载不可跳过 (2026-08-04)
 

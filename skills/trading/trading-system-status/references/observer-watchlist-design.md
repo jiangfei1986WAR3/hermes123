@@ -13,7 +13,7 @@
 
 ```
 ① watchlist.json         观察列表（唯一状态文件）
-② watchlist-check.py     聚合哨兵（every 1m, no_agent, deliver=all）
+② watchlist-check.py     聚合哨兵（schedule `* * * * *`, no_agent, deliver=all）
 ③ watchlist-update.py    每小时扫描更新（每小时, no_agent, 完全静默无输出）
 ```
 

@@ -36,7 +36,7 @@ description: 查用户交易系统监控和持仓状态时用。例行检查命�
 | plan 没了但持仓/挂单还在 | 修复前=计划过期直接删 plan（XRP 08-08 例，过期只删 plan 文件，持仓与挂单保留）；**修复后：过期时有持仓 → plan 保留**（日志 `计划已过期但有活跃持仓，保留计划文件`），无持仓才删。仍见"过期+plan 没了+持仓在"=修复前遗留仓，建议手动补保本 SL |
 | 部分止盈后 SL 数量≠剩余持仓（XRP 例：TP1 后 96.2→48.1，SL 仍 96.2） | **移保本断链**。移保本机制（见下节）**只对 plan 文件存在的币生效**；XRP 的 plan 08-07 22:00 过期被删 → 退出 manage 循环 → 01:00 TP1 成交后无人更新挂单。识别：SL triggerPrice=原止损位且 qty>持仓、`updateTime=createTime`（从未被改过）。reduceOnly 兜底：触发时按可平量成交=全平，不反向开仓，风控不裸奔；代价=已实现利润可能被反弹回吐。**已修（08-08）：过期有持仓保留 plan + XRP 手动补保本 SL 48.1@1.0368**；再遇=修复前遗留或 plan 被手动删 |
 | 事件目录反复出现/清空 | signal_monitor 写事件 → executor process-events 处理删除。处理中拦截的事件也会被清 |
-| 开仓滑点 | 突破市价单正常 0.3-0.7%（如触发 57.25 成交 57.68）。SL/TP 同步平移，风控距离不缩水 |
+| 开仓滑点 | **禁凭印象报百分比**——先跑 `scripts/slippage_audit.py`。62 笔实盘真值：不利滑点中位 **0.165%**、均值 0.275%，>0.7% 仅 10/62、>1.0% 仅 4/62（旧文档"常规 0.3-0.7%"是偏高的印象值，已作废）。SL/TP 同步平移，风控距离不缩水。主因=收盘确认制的链路延迟，非流动性，详见 `references/entry-slippage-audit.md` |
 | 余额变动核对 | 已实现盈亏 ≈ 余额变动（有浮仓时：余额变动 = 已实现 ± 浮亏变动）。如 ZEC 止损 -1.55U ≈ 余额 61.55→59.95。手算对不上时用 `api_get('/fapi/v1/income', {'limit': 100}, signed=True)` 拉 COMMISSION/FUNDING_FEE/REALIZED_PNL 一次闭合缺口（08-08 例：-2.86U 缺口 = 手续费 -1.41 + 资金费 -0.12 + 更早 HYPE 平仓 -2.29） |
 | state 出现 `market_filter` 记录 | market_filter 只是评估拦截记录（写 state、不写事件），**不代表计划失效**；计划继续监控，触发时若大盘过滤不满足会被挡。WLD 8-06 例：state 有 market_filter 记录、plan 文件仍在、dry-run 正常 |
 | state 有触发记录但无持仓 | executor 入场偏差门拒绝（现价偏离触发价 > 止损距离，防暴涨追高，日志 `入场偏差过大`/`deviation_check REJECTED`）或 market_filter 拦截（`MARKET_FILTER_BLOCKED`）。**正常拦截，不是故障**；别误报"触发丢了" |
@@ -82,7 +82,7 @@ description: 查用户交易系统监控和持仓状态时用。例行检查命�
 用户想"盯某个价格位置"但还不是可执行交易计划时（如等 XRP 反弹到 1h MA7 再复查是否转弱），用独立观察脚本 + no_agent Cron，**不走** plan/验证/executor 链路：
 
 1. 写独立 Python 脚本（模板 `templates/watch-check.py`，线上参照 `~/.hermes/scripts/xrp-watch-check.py`）：现价 >= 观察位 → print 通知文本；否则**静默退出（exit 0 且无输出）**；state 文件防重复通知（触发一次后不再发）；回落跌破重置位自动重置，允许再次观察；API 失败静默（exit 0——no_agent 下非零退出会发错误告警）
-2. 建 Cron：`no_agent=true`、`deliver=all`、`every 1m`；⚠️ `script` 参数用**文件名**（相对 `~/.hermes/scripts/`），绝对路径会被拒绝；⚠️ 不要传 `repeat` 参数（传 `repeat='forever'` 报 TypeError `'<=' not supported between instances of 'str' and 'int'`），省略即默认 forever（2026-08-11 实测）
+2. 建 Cron：`no_agent=true`、`deliver=all`、`schedule="* * * * *"`（⚠️ **禁写 `every 1m`**——interval 型有 0.4s 锚点错位，实测真实间隔 120s 慢一倍，根因见 `references/cron-cadence-and-latency.md`）；⚠️ `script` 参数用**文件名**（相对 `~/.hermes/scripts/`），绝对路径会被拒绝；⚠️ 不要传 `repeat` 参数（传 `repeat='forever'` 报 TypeError `'<=' not supported between instances of 'str' and 'int'`），省略即默认 forever（2026-08-11 实测）
 3. no_agent 交付语义：非空 stdout 原样发微信，空 stdout 完全静默——天然实现"触发才通知，不触发零打扰"
 4. 触发通知后由用户决定是否进入正常 plan 流程；不用时删 Cron + 脚本 + state 三样
 

@@ -8,7 +8,7 @@
 - **2026-07-26｜write_file 覆盖已修复的监控脚本**｜用旧模板覆盖了含 EVENT_WRITTEN 修复的 uni-monitor-check.sh，脚本退化｜教训：覆盖前先 `[ -f ]` 检查，已存在不覆盖（→ 主文档 Monitor Deployment 节）
 - **2026-08-03｜验证拦截跑 monitor-check.sh 误开 BNB 仓**｜验证 BNB 时没带 --dry-run 跑 monitor-check.sh，写出 TRIGGER 事件，2 分钟内 executor 开了 0.16@592.41——正是验证刚否决的那笔｜教训：验证=只跑 `--dry-run` 一条命令；monitor-check.sh 是生产通道，验证阶段碰都不碰
 - **2026-08-05｜XLM dry-run 已 ALERT 后仍跑生产脚本**｜同款复发：dry-run 报警后为看输出又跑了 monitor-check.sh → 写出 TRIGGER 事件（及时删除未开仓）｜教训：同上，规则两次验证
-- **2026-08-04｜全部 Cron 消失**｜另一会话（微信/Web）执行了"清空所有监控和计划"，连 trading-cron 一起删｜诊断法：jobs.json 68字节=空列表，用 mtime 推清空时刻 + session_search 找执行者；重建 trading-cron 用 every 1m，建后看 cron/output 时间戳验证节奏
+- **2026-08-04｜全部 Cron 消失**｜另一会话（微信/Web）执行了"清空所有监控和计划"，连 trading-cron 一起删｜诊断法：jobs.json 68字节=空列表，用 mtime 推清空时刻 + session_search 找执行者；重建 trading-cron 用 `schedule="* * * * *"`（当年记的 `every 1m` 已作废——2026-08-25 查明 interval 型有 2 倍空转），建后看 cron/output 时间戳验证节奏应为 60s
 
 ## 执行器 BUG 修复史（全部已修复）
 
