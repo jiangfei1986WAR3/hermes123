@@ -7,7 +7,7 @@ description: Orchestrate the user's crypto futures workflow by routing between m
 
 Use this skill as the workflow router for the user's crypto futures process. It coordinates these skills:
 
-- `binance-market-scanner`: scan Binance USDT perpetual markets and save ranked results.
+- `binance-market-scanner`: scan Binance USDT perpetual markets, score/rank the universe, and save results.
 - `trading-analysis`: analyze trend, entry logic, stop/protection line, targets, holding, adding, reducing, and exit.
 - `trade-execution-planner`: convert analysis into executable entry, stop, take-profit, risk, position size, monitor conditions, and order-parameter drafts.
 - `risk-manager`: calculate position size, stop distance, leverage exposure, and liquidation-risk warnings.
@@ -15,6 +15,15 @@ Use this skill as the workflow router for the user's crypto futures process. It 
 - `trade-review`: review completed or in-progress trades and produce next-time rules.
 
 Do not duplicate child-skill instructions. Load and use the relevant child skill when the workflow requires it.
+
+## Layer Ownership And Final Decision
+
+- `binance-market-scanner` is the broad-market ranking layer. In the default workflow it collects public data, scores and ranks symbols, and selects at most 3 candidates. Except for liquidity/data sufficiency and explicit signal conflicts, it does not apply historical case filters or make final trade decisions.
+- Every selected Top candidate must run `fetch_klines.py` and the complete `trading-analysis` workflow before any historical risk checklist is applied. Do not drop a Top candidate before deep analysis because it resembles an old case.
+- `trading-candidate-screening` is a post-analysis checklist. Its historical patterns prompt current-data verification; they are not an independent scoring system or final decision layer.
+- `trade-execution-planner` is the single owner of exact trigger, structural stop, targets, R, quantity, displayed risk amount, cancellation conditions, and final `PLAN_READY` / `WATCH_ONLY` / `NOT_EXECUTABLE` status.
+- `trading-plan-format` validates plan arithmetic/schema and monitor compatibility. It does not reinterpret market direction.
+- Historical experience may be saved automatically, but a new fixed threshold or automatic rejection rule remains `PROPOSED / NOT ACTIVE` until the user explicitly approves it.
 
 ## User Preference
 
@@ -37,7 +46,7 @@ plan 文件 (~/.hermes/trading-plans/<SYMBOL>-plan.json)
 - 计划目录：`~/.hermes/trading-plans/`
 - 监控脚本：`~/.hermes/scripts/<symbol>-monitor-check.sh`
 - 监控引擎：`~/.hermes/skills/auto-signal-monitor/scripts/signal_monitor.py`
-- 执行器：`~/.hermes/scripts/binance_executor.py`（5门：仓位检查、金额上限、杠杆限制、重复单、隔离模式）
+- 执行器：`~/.hermes/scripts/binance_executor.py`（确定性防错：持仓/重复仓位、方向与TP、名义价值偏差、异常止损距离、触发后入场偏差、杠杆与逐仓、保护单失败紧急平仓）
 - 事件处理 Cron：`trading-cron.sh`（schedule `* * * * *`＝真 60s，处理开仓/TP1/过期）
 - 持仓管理：同一 Cron 内 manage 子命令
 
@@ -98,7 +107,8 @@ If the state is unclear, infer from the message. Ask only when missing facts wou
 → 自动选最优候选（≤3个，不问用户选哪个）
 → 【必须】运行 fetch_klines.py 拉取候选币原始K线数据（≤3个币×4周期，约15秒）
 → 【必须】加载 trading-analysis 技能，基于 fetch_klines.py 的原始数据（不是扫描器结果），对≤3个候选币跑完整多周期分析（趋势/入场逻辑/保护线/目标区间）
-→ 【必须】加载 trade-execution-planner 技能，仅对上述≤3个候选将分析结果转为执行计划（触发价/止损/TP/取消条件）
+→ 加载 trading-candidate-screening 作为深度分析后的历史风险复核清单（不得提前淘汰Top候选、不得独立裁决）
+→ 【必须】加载 trade-execution-planner 技能，仅对上述≤3个候选将分析结果转为执行计划，并统一裁决状态（触发价/止损/TP/R/数量/风险额/取消条件）
 → 固定保证金公式算数量
 → 生成 plan 文件（~/.hermes/trading-plans/）
 → 验证：跑一次 monitor-check.sh（见"验证拦截规则"）
@@ -115,6 +125,7 @@ If the state is unclear, infer from the message. Ask only when missing facts wou
 - 必须包含：量价关系独立分析、保护线推导逻辑（为什么放这个价位）、操作场景分支（如果A则B）
 - 扫描器数据只是输入素材，不能代替分析过程。不能用"扫描器已经给了均线/量比，直接总结"来跳过
 - 禁止把 trading-analysis 的输出缩写成几行摘要
+- Top候选进入深度分析后，历史案例只作复核提示；最终状态由 trade-execution-planner 基于本轮数据统一给出
 
 中间不停下来问"你选哪个""要不要监控"。除非：
 - 已有持仓（互斥冲突）→ 告知用户，等指示
@@ -127,6 +138,7 @@ If the state is unclear, infer from the message. Ask only when missing facts wou
 scan or symbol request
 -> fetch_klines.py 拉取候选币原始K线（≤3个币×4周期）
 -> trading-analysis（基于原始K线数据，不是扫描器结果）
+-> trading-candidate-screening（仅作历史风险复核清单）
 -> trade-execution-planner
 -> 固定保证金公式算数量
 -> 生成 plan JSON 文件
@@ -149,10 +161,7 @@ Use when the user has no position and asks what is worth watching.
    - If Binance public endpoints are slow, wait longer and rely on progress output before downgrading.
 2. Summarize strongest long and short watchlists.
 3. Apply market filter from BTC/ETH.
-4. Pick at most 3 candidates:
-   - closest confirmed setup
-   - best pullback candidate
-   - strongest risk warning or avoid candidate
+4. Pick at most 3 opportunity candidates using score, direction coverage, setup maturity, and proximity to a valid trigger. Risk warnings stay attached as candidate fields; an avoid-only example does not reserve a Top-3 slot unless the user explicitly asks for one.
 5. For selected candidates, use `trading-analysis` to define trigger, protection line, and target zones.
 6. Use `trade-execution-planner` for any candidate that could become actionable.
 7. 直接生成 plan 文件，验证静默后建监控 Cron（见"验证拦截规则"），不问用户要不要。

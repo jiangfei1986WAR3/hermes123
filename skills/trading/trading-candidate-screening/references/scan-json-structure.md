@@ -1,7 +1,7 @@
 # 扫描结果 JSON 结构（binance-market-scanner 输出）
 
 文件：`/root/Documents/trae_projects/zhuandaqian/market-scans/*_binance-usdt-perp-scan.json`
-顶层：`{"errors": [], "results": [...], "summaryRows": [...], "topLong": [...], "topShort": [...]}`
+顶层：`{"generatedAt", "filter", "counts", "errors": [], "results": [...], "summaryRows": [...], "topLong": [...], "topShort": [...], "stability"}`
 
 两种行结构混用会 KeyError（2026-08-16 会话烧了 3 次解析才发现）：
 
@@ -27,3 +27,7 @@
 - 候选逐周期细节 + BTC/ETH 大盘 filter（日线空头排列？15m 放量方向？）→ 读 summaryRows
 
 BTC/ETH 大盘 filter 速查（summaryRows）：`dClose < dMA7 < dMA25` = 日线空头排列；`m15VolRatio > 1.5` 且 `m15BuyRatio < 0.48` = 15m 放量下压。
+
+## stability（跨轮名单稳定性）
+
+`stability` = {jaccard: 0~1, prevAt: 上一轮扫描时间, added: [...], dropped: [...], warning: 名单跳变异常}。jaccard < 0.5 时 scanner 报 warning，只表示相邻两轮候选名单变化较大；原因可能是高潮轮动、方向切换、闪崩修复、成交额门槛变化等。它是市场切换提示，不是高潮或空仓的独立判据，须结合Top候选深度分析、量价、R与大盘结构解释。

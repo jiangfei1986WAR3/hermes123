@@ -1,5 +1,7 @@
 # 风险额上限 2.6U 否决 + 修复日 BTC 龙头档(2026-08-23 17:24/18:23 两轮实录)
 
+> **历史状态（非现行规则）**：本文记录当时Agent曾把2.6U作为候选筛选上限的实战过程。该固定金额门槛未经用户批准，当前为 `PROPOSED / NOT ACTIVE`；保留原数字用于复盘，不得据此自动淘汰Top候选或判 `WATCH_ONLY`。现行流程须先完成Top候选深度分析，再由 `trade-execution-planner` 基于当前结构、ATR、R、量价和市场环境统一裁决，风险额仅展示和比较。
+
 ## 背景
 
 08-22 闪崩次日,同日多轮扫描。07:41/16:03 两轮全 WATCH_ONLY(见 `flash-crash-repair-batch-rejection-2026-08-23.md` / `double-sided-block-flash-repair-08-23.md`)。17:24 起市场结构转向,18:23 建成当日首个计划(BTC 突破多)。

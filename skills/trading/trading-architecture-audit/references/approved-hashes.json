@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "approved_at": "2026-08-26T16:50:00+08:00",
+  "note": "Read-only baseline. Update only after explicit user approval and reviewed code diff.",
+  "execution_hashes": {
+    "~/.hermes/skills/binance-market-scanner/scripts/scan_binance_usdt_perps.py": "e0a50f0668b7aca0afc9aace496551c326d75087d2c5ac6ba2a207e62e211f1f",
+    "~/.hermes/skills/trading-analysis/scripts/fetch_klines.py": "49326fcd5c852bb7520216230dea9e706f4b25efb1223466cac41f6a460b98c7",
+    "~/.hermes/skills/auto-signal-monitor/scripts/signal_monitor.py": "dfb2a25263b38fcebd73241a9ecd9d5a1b27f054642ecbdb50fb8327db938b01",
+    "~/.hermes/scripts/binance_executor.py": "c6bc69cb1cd8dad49d17915ce05f5a50940aab98571cc55155957db4ac9a41a1",
+    "~/.hermes/scripts/trading-cron.sh": "348337df499be471ce9928d4530ad1be2ef9d4e31ef529ae344a60c0cb07ac2c"
+  }
+}

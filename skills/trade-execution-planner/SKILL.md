@@ -12,9 +12,22 @@ Turn a crypto futures idea into a complete execution plan. This skill is the mis
 - Do not log in, place orders, set stops, close positions, transfer funds, or operate accounts.
 - Do not call exchange execution tools directly. Generate order-parameter drafts or commands for manual confirmation only.
 - Mark the plan `NOT_EXECUTABLE` when entry, stop, risk, or quantity cannot be determined.
-- Prefer risk-based sizing over margin-based sizing.
+- In generic workflows, prefer risk-based sizing over margin-based sizing; the user's fixed-margin live workflow is the explicit override below.
 - Treat outputs as planning support, not financial advice or guaranteed prediction.
 - Never average down losing futures positions as a default action.
+
+## User System Override
+
+For this user's live trading workflow, these rules override the generic risk-percent examples below:
+
+- Fixed margin: 10 USDT.
+- Leverage: BTC 20x; all other symbols 10x.
+- Quantity: `qty = (10 × leverage) / entry_trigger`, rounded to exchange precision.
+- Do not use the generic 0.5% equity-risk model or `plan_calculator.py` to size this user's live plans.
+- Derive the stop from valid market structure with enough ATR room; never tighten it merely to fit a dollar-risk target.
+- Calculate and display `risk_amount_usdt = qty × |entry_trigger − structural_stop|` from the trigger price, not current price.
+- No fixed USDT risk amount is an automatic rejection threshold unless the user explicitly approves it. In particular, 2.6U is historical guidance, not an active hard gate.
+- This skill is the single final decision layer for `PLAN_READY`, `WATCH_ONLY`, and `NOT_EXECUTABLE`. Historical checklists provide evidence but do not set the final status.
 
 ## Workflow
 
@@ -30,13 +43,12 @@ Turn a crypto futures idea into a complete execution plan. This skill is the mis
    - current price if available
    - trigger level or intended entry
    - protection/invalidation level
-   - account equity or risk amount
-   - risk percent, default `0.5%` if unspecified
-   - leverage preference, default compare or use `10x` for command drafts
+   - fixed margin and leverage from the user-system override
+   - calculated risk amount for display/comparison (not risk-based sizing)
    - optional ATR, recent swing high/low, resistance/support zones, funding/OI/BTC/ETH filter
 3. If the user only gives a vague idea, use `trading-analysis` first when available to define the trigger level, protection line, and target zones.
 4. Read `references/execution-rules.md` when choosing entry buffers, stop buffers, target rules, monitor states, or executable-status rules.
-5. Run `scripts/plan_calculator.py` when entry, stop, equity, and risk percent are known and exact sizing/R values are needed.
+5. For this user's live workflow, calculate quantity with the fixed-margin formula and calculate R/risk amount directly. Use `scripts/plan_calculator.py` only for unrelated generic risk-percent scenarios.
 6. Produce:
    - executable status
    - entry trigger and order type
@@ -92,11 +104,10 @@ For JSON handoff to monitoring or execution tooling, also provide:
     {"price": 65500.0, "reduce_percent": 50}
   ],
   "risk": {
-    "equity_usdt": 1000.0,
-    "risk_percent": 0.5,
-    "risk_amount_usdt": 5.0,
-    "leverage": 10,
-    "quantity": 0.012
+    "margin_usdt": 10.0,
+    "risk_amount_usdt": 3.9,
+    "leverage": 20,
+    "quantity": 0.003
   },
   "monitor": {
     "trigger_condition": "15m close >= 62500 AND vol_ratio >= 1.0",
@@ -110,13 +121,13 @@ For JSON handoff to monitoring or execution tooling, also provide:
 
 ## Script Usage
 
-Use the calculator for exact sizing:
+Generic risk-percent calculator example (not for this user's fixed-margin live workflow):
 
 ```powershell
 python3 "~/.hermes/skills/trade-execution-planner/scripts/plan_calculator.py" --symbol BTCUSDT --side long --entry 62500 --stop 61200 --equity 1000 --risk-pct 0.5 --leverage 10 --tp 63800,65500
 ```
 
-The script returns JSON with stop distance, risk amount, quantity, notional, initial margin, target R multiples, and Binance Futures command drafts.
+The script returns generic risk-percent sizing output. It is not the sizing source for this user's fixed-margin live workflow.
 
 ## Integration
 

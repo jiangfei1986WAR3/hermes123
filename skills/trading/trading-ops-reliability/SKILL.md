@@ -210,8 +210,7 @@ When generating a plan via trading-command-center workflow, the plan JSON MUST c
 3. `require_close: true` for breakout/pullback entries (15m candle close confirmation)
 4. `timeframe: "15m"` matching the monitor's check interval
 5. **Rule IDs must follow naming convention** (see "Rule ID Naming" section)
-6. **盈亏比检查**：TP1 距离 ≥ 止损距离（硬性 ≥1R），破位/突破类目标空间 ≥2R 才建计划。低波动大盘币破位后空间常贴支撑（1R 上下）——执行再完美也难盈利。候选筛选阶段就应排除。
-   **执行流程：扫描出候选 → 先粗筛盈亏比（阻力/支撑距离 vs 止损距离）→ 再拉 K 线精析**，避免为低分且盈亏比不足的币浪费深度分析。
+6. **盈亏比检查**：Top候选全部完成 `fetch_klines` 和深度分析后，由 `trade-execution-planner` 用结构止损与真实目标统一验算R；本运维技能不在深度分析前粗筛或裁决候选。计划文件层仍须包含完整触发/止损/TP，R算术与门槛以 `trading-plan-format` 和planner当前规则为准。
 
 **位置否决与分数无关**：`rangePos > 1`（或 < 0）= 现价已在近 20 根区间之外，配合双周期 RSI 极值 = 位置否决。**向用户说明被否候选的理由，不要静默丢弃**——用户会问"为什么不选分最高的"。
 
@@ -223,7 +222,7 @@ When generating a plan via trading-command-center workflow, the plan JSON MUST c
 
 **下跌末段市场画像（同轮）**：大盘偏空（BTC/ETH 双 SHORT_WATCH）但空头候选全部"贴前低+动能衰减+超卖边缘"、多头候选全部"顶到压力位"= 破位空间已释放大半，市场在等方向。此形态下多轮全 WATCH_ONLY 是正确结果，如实报告"下跌末段、等节奏"，别因大盘偏空就放松空单标准。
 
-**筛选顺序：分数 ≥60 → 盈亏比粗筛 → K线精析时检查动能方向（MACD 柱是否与持仓方向一致）和 RSI 超买超卖 → 全过才建计划**。10 条不合格模式的权威清单与案例在 **trading-candidate-screening 技能**（本文件不重复维护，防两处漂移）。
+**现行顺序：分数达标 → 选择最多3个Top候选 → Top候选全部 `fetch_klines` + `trading-analysis` → `trading-candidate-screening` 只作历史风险复核 → `trade-execution-planner` 统一裁决并生成计划**。本文件只维护运行可靠性和plan部署检查，不再维护候选淘汰顺序。
 
 **Quick validation command**:
 ```bash

@@ -12,8 +12,8 @@ A plan is executable only when all fields are present:
 - entry trigger price
 - min_volume_ratio（触发量比门槛：突破类 ≥ 1.0，回踩类 ≥ 0.8，固定值）
 - stop loss / invalidation price
-- risk percent or fixed risk amount
-- account equity or explicit position size
+- fixed margin/leverage or explicit position size
+- calculated risk amount for display and comparison
 - take-profit logic
 - cancel condition
 
@@ -86,12 +86,15 @@ Short:
 
 ## Risk Rules
 
-- Default risk per trade: `0.5%` of equity unless user specifies otherwise.
-- Conservative range: `0.3%` to `1.0%`.
+- For this user's live workflow, use fixed margin 10U; BTC 20x and other symbols 10x. Quantity is calculated from `entry_trigger`, not current price.
+- The generic `0.5%` equity-risk model applies only outside this user's fixed-margin workflow.
 - Avoid plans with reward/risk below 1.2R unless there is a clear scalp rationale.
 - Do not make stop distance so tight that normal spread/noise can trigger it.
 - Do not enlarge position size to compensate for a weak setup.
 - Leverage changes margin usage, not the planned loss at the stop; position size and stop distance control risk.
+- Derive the stop from valid structure with enough ATR room, then calculate and display `risk_amount_usdt = qty × |entry_trigger − stop|`.
+- No fixed USDT amount is an automatic rejection threshold until the user explicitly approves it. `2.6U` is not an active hard gate.
+- Final status belongs to `trade-execution-planner`; scanner rankings and historical case checklists are inputs, not independent rejection layers.
 
 ## Binance Futures Draft Rules
 
