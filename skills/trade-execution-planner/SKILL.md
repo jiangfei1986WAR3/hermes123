@@ -31,14 +31,19 @@ For this user's live trading workflow, these rules override the generic risk-per
 
 ## Workflow
 
-1. Identify the setup:
-   - `breakout_long`
-   - `pullback_long`
-   - `breakdown_short`
-   - `retest_short`
-   - `range_trade`
-   - `manage_existing_position`
-2. Gather required inputs:
+1. Identify the candidate direction, then evaluate both same-direction entry paths:
+   - long: `breakout_long` and `pullback_long`
+   - short: `breakdown_short` and `retest_short`
+   - `range_trade` and `manage_existing_position` remain single-path workflows.
+2. For each applicable path, either produce a numeric draft or mark `STRUCTURE_NOT_PRESENT`; never invent a trigger, pullback/retest zone, stop, or target merely to complete both paths. Failure of one path does not skip the other, and both may be rejected.
+3. For every numeric draft, calculate on that path's own `entry_trigger`:
+   - structural stop with adequate ATR room
+   - nearest real structural TP1 and next TP2
+   - TP1/TP2 R, fixed-margin quantity, displayed USDT risk
+   - current-price/missed-entry state, market conflict, and cancellation condition
+4. Compare valid drafts and select one path or none. Explain the decisive structural/R/execution-quality difference; do not add a new fixed threshold or automatic gate.
+5. Only the selected path may become `PLAN_READY` and be handed to monitoring. Per symbol, output at most one runtime plan; unselected drafts are analysis only and must not create plan files, events, or Cron jobs. Never overwrite an existing same-symbol plan automatically.
+6. Gather shared inputs:
    - symbol and direction
    - current price if available
    - trigger level or intended entry
@@ -46,10 +51,10 @@ For this user's live trading workflow, these rules override the generic risk-per
    - fixed margin and leverage from the user-system override
    - calculated risk amount for display/comparison (not risk-based sizing)
    - optional ATR, recent swing high/low, resistance/support zones, funding/OI/BTC/ETH filter
-3. If the user only gives a vague idea, use `trading-analysis` first when available to define the trigger level, protection line, and target zones.
-4. Read `references/execution-rules.md` when choosing entry buffers, stop buffers, target rules, monitor states, or executable-status rules.
-5. For this user's live workflow, calculate quantity with the fixed-margin formula and calculate R/risk amount directly. Use `scripts/plan_calculator.py` only for unrelated generic risk-percent scenarios.
-6. Produce:
+7. If the user only gives a vague idea, use `trading-analysis` first when available to define the trigger level, protection line, and target zones.
+8. Read `references/execution-rules.md` when choosing entry buffers, stop buffers, target rules, monitor states, or executable-status rules.
+9. For this user's live workflow, calculate quantity with the fixed-margin formula and calculate R/risk amount directly. Use `scripts/plan_calculator.py` only for unrelated generic risk-percent scenarios.
+10. Produce the selected plan's:
    - executable status
    - entry trigger and order type
    - stop loss / invalidation
@@ -60,7 +65,7 @@ For this user's live trading workflow, these rules override the generic risk-per
 
 ## Executable Status
 
-Use these labels consistently:
+Use these labels consistently. Path drafts may also use `STRUCTURE_NOT_PRESENT`; it is a comparison result, not a deployable plan status:
 
 - `WATCH_ONLY`: setup is interesting but has no concrete trigger or stop.
 - `PLAN_READY`: entry, stop, targets, invalidation, and risk are defined, but trigger has not occurred.

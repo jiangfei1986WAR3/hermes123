@@ -21,7 +21,9 @@ Do not duplicate child-skill instructions. Load and use the relevant child skill
 - `binance-market-scanner` is the broad-market ranking layer. In the default workflow it collects public data, scores and ranks symbols, and selects at most 3 candidates. Except for liquidity/data sufficiency and explicit signal conflicts, it does not apply historical case filters or make final trade decisions.
 - Every selected Top candidate must run `fetch_klines.py` and the complete `trading-analysis` workflow before any historical risk checklist is applied. Do not drop a Top candidate before deep analysis because it resembles an old case.
 - `trading-candidate-screening` is a post-analysis checklist. Its historical patterns prompt current-data verification; they are not an independent scoring system or final decision layer.
-- `trade-execution-planner` is the single owner of exact trigger, structural stop, targets, R, quantity, displayed risk amount, cancellation conditions, and final `PLAN_READY` / `WATCH_ONLY` / `NOT_EXECUTABLE` status.
+- After deep analysis, each candidate must check two same-direction entry paths: long = `breakout_long` + `pullback_long`; short = `breakdown_short` + `retest_short`. A missing structure is recorded, never invented, and failure of the first path does not skip the second.
+- `trade-execution-planner` is the single owner of both path drafts, exact trigger, structural stop, targets, R, quantity, displayed risk amount, cancellation conditions, and final `PLAN_READY` / `WATCH_ONLY` / `NOT_EXECUTABLE` status. It may select either path or neither.
+- Each symbol may deploy at most one selected plan: only one `<SYMBOL>-plan.json` and one price-monitor Cron. Unselected drafts never enter the plan/event/Cron runtime chain, and an existing same-symbol plan is never overwritten automatically.
 - `trading-plan-format` validates plan arithmetic/schema and monitor compatibility. It does not reinterpret market direction.
 - Historical experience may be saved automatically, but a new fixed threshold or automatic rejection rule remains `PROPOSED / NOT ACTIVE` until the user explicitly approves it.
 
@@ -107,10 +109,11 @@ If the state is unclear, infer from the message. Ask only when missing facts wou
 → 自动选最优候选（≤3个，不问用户选哪个）
 → 【必须】运行 fetch_klines.py 拉取候选币原始K线数据（≤3个币×4周期，约15秒）
 → 【必须】加载 trading-analysis 技能，基于 fetch_klines.py 的原始数据（不是扫描器结果），对≤3个候选币跑完整多周期分析（趋势/入场逻辑/保护线/目标区间）
+→ 对每个候选检查同方向双路径（多：突破+回踩；空：破位+反抽）；结构不存在就记录，禁止硬凑
 → 加载 trading-candidate-screening 作为深度分析后的历史风险复核清单（不得提前淘汰Top候选、不得独立裁决）
-→ 【必须】加载 trade-execution-planner 技能，仅对上述≤3个候选将分析结果转为执行计划，并统一裁决状态（触发价/止损/TP/R/数量/风险额/取消条件）
+→ 【必须】加载 trade-execution-planner 技能，分别数值化双路径并统一裁决（可选其一或都不选）
 → 固定保证金公式算数量
-→ 生成 plan 文件（~/.hermes/trading-plans/）
+→ 每币仅将胜出路径生成一份 plan 文件（~/.hermes/trading-plans/<SYMBOL>-plan.json）；未选草案不部署
 → 验证：跑一次 monitor-check.sh（见"验证拦截规则"）
 → 按验证拦截规则处理（静默→建Cron / 回踩失效→不建 / 突破→正常建）
 → 输出汇总表 + 每个候选的分析详情（数据时间/多周期状态/核心逻辑/警告/执行状态）
@@ -138,10 +141,11 @@ If the state is unclear, infer from the message. Ask only when missing facts wou
 scan or symbol request
 -> fetch_klines.py 拉取候选币原始K线（≤3个币×4周期）
 -> trading-analysis（基于原始K线数据，不是扫描器结果）
+-> 同方向双路径检查（多：突破+回踩；空：破位+反抽）
 -> trading-candidate-screening（仅作历史风险复核清单）
--> trade-execution-planner
+-> trade-execution-planner（分别数值化，单选或都不选）
 -> 固定保证金公式算数量
--> 生成 plan JSON 文件
+-> 每币仅生成一份胜出 plan JSON；未选草案不进入运行链
 -> 验证（见"验证拦截规则"：回踩/失效→不建，突破→正常建）
 -> 创建监控 Cron（接入 signal_monitor + binance_executor 链路）
 -> 触发后自动执行（executor 5门控制）
