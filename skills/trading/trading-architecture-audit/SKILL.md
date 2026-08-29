@@ -70,8 +70,23 @@ python3 ~/.hermes/skills/trading/trading-architecture-audit/scripts/audit.py --m
 
 The approved runtime and document baselines are immutable during normal audits. `references/approved-hashes.json` contains five execution hashes. `references/approved-documents.json` inventories approved `.md/.json/.py/.sh` files in twelve trading knowledge directories. Updating either requires an explicit user instruction after reviewing the intended diff. The auditor itself has no update command.
 
-## New Content Admission Check
+## Quick Post-Self-improvement Check
 
+After Self-improvement modifies trading-related documents, run the read-only triage check:
+
+```bash
+python3 ~/.hermes/skills/trading/trading-architecture-audit/scripts/quick_drift_check.py
+```
+
+It reports changed/added/removed trading documents and flags only high-confidence known patterns (possible layer drift, stale Cron wording, or unapproved-gate revival). It never repairs, moves, deletes, commits, pushes, scans markets, calls exchange APIs, or touches plans, events, state, Cron, or runtime code. A normal run does not write a checkpoint. `PASS` means no known high-confidence pattern was found; it is not a substitute for the full audit. If it reports `REVIEW REQUIRED`, stop and request manual review before repairing or pushing. After an approved repair, run the full `audit.py --mode pre`.
+
+To explicitly establish a quick-check checkpoint after reviewing the current state, run:
+
+```bash
+python3 ~/.hermes/skills/trading/trading-architecture-audit/scripts/quick_drift_check.py --save-checkpoint
+```
+
+The checkpoint is only for this quick check's comparison and is never an approved architecture baseline.
 Before adding or modifying any trading skill, reference, or incident-log entry, perform this lightweight manual check:
 
 1. Is this a stable reusable rule, or a single incident?

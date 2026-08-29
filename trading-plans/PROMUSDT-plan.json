@@ -1,0 +1,62 @@
+{
+  "name": "PROM回踩5.35做多",
+  "symbol": "PROMUSDT",
+  "direction": "long",
+  "setup_type": "pullback_reclaim_long",
+  "status": "PLAN_READY",
+  "created_at": "2026-08-29T22:26:00+08:00",
+  "expires_at": "2026-08-30T22:26:00+08:00",
+  "market_filter_symbols": ["BTCUSDT", "ETHUSDT"],
+  "intervals": ["15m", "1h"],
+  "cooldown_seconds": 600,
+  "alerts": {"sound": "beep", "speech": false, "wav_path": null},
+  "entry": {"order_type": "STOP_MARKET", "trigger_price": 5.35, "limit_price": null},
+  "entry_trigger": 5.35,
+  "stop_loss": 5.12,
+  "take_profits": [
+    {"price": 5.657, "reduce_percent": 50},
+    {"price": 5.8, "reduce_percent": 50}
+  ],
+  "risk": {"margin_usdt": 10, "leverage": 10, "quantity": 18.7},
+  "monitor": {
+    "trigger_condition": "15m收盘站上5.35(回踩5.25-5.34缩量企稳后收复5.35),回踩确认做多触发",
+    "min_volume_ratio": 1.0,
+    "invalidation_condition": "实时跌破5.12(回踩低点下方,1h ATR 1.10x缓冲,多头逻辑失效)",
+    "market_filter": "BTC/ETH不出现放量下跌",
+    "expires_after": "24h"
+  },
+  "rules": [
+    {
+      "id": "pullback_reclaim_535",
+      "level": "ALERT",
+      "type": "pullback_reclaim",
+      "side": "above",
+      "pullback_low": 5.25,
+      "pullback_high": 5.34,
+      "reclaim_price": 5.35,
+      "invalidation_price": 5.12,
+      "timeframe": "15m",
+      "min_volume_ratio": 1.0,
+      "message": "PROM 15m回踩5.25-5.34后收复5.35,回踩确认做多触发"
+    },
+    {
+      "id": "invalidation_512",
+      "level": "ALERT",
+      "type": "invalidation",
+      "side": "below",
+      "price": 5.12,
+      "timeframe": "15m",
+      "require_close": false,
+      "message": "PROM跌破5.12(回踩低点下方),多头逻辑失效"
+    },
+    {
+      "id": "market_filter",
+      "level": "WATCH",
+      "type": "market_filter",
+      "symbols": ["BTCUSDT", "ETHUSDT"],
+      "timeframes": ["15m", "1h"],
+      "min_volume_ratio": 1.2,
+      "message": "BTC/ETH放量下跌,暂停PROM做多"
+    }
+  ]
+}

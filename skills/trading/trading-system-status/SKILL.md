@@ -20,7 +20,7 @@ description: 查用户交易系统监控和持仓状态时用。例行检查命�
    signal_monitor 规则语义（给用户讲 plan 操作场景分支时，必须按源码实际行为讲，别把能力说得比代码强——用户会逐条质问"这些 plan 都包含吗"）：
    - `min_volume_ratio` =「量比≥1.0＝不低于前20根均量」，是"防缩量破位"的弱保护，**不是"放量"**（放量通常量比>1.5）。别用"放量触发"这个词
    - `evaluate_market_filter`（源码 156-181 行）用**实时 last**，**非已收盘 close 确认**，会短线抖动误拦截；即"改 4h 收盘 close"待办升级点（暂缓未做）。方向语义**镜像对称**（源码 direction 参数）：拦空=last>MA25 且 last>open 且 volRatio≥配置（BTC/ETH 放量强势上涨）；拦多=last<MA25 且 last<open 且 volRatio≥配置（BTC/ETH 放量下跌）。多单 plan 的 market_filter 规则无需写条件方向——引擎按 plan 的 `direction` 自动选分支；08-29 SOL 回踩多按源码验证后部署
-   - `pullback_reclaim` side=below（反抽空）的触发序列（源码 142-150 行 had_pullback 判定）：20 根窗口内须先有收盘 ≤ reclaim（首次跌破），再出现收盘 > reclaim（反抽），随后收盘 ≤ reclaim 才触发——「破位→反抽→再破位」三段，首个跌破收盘不触发（first_below > last_above）。破位发生在窗口外（>5h 前）时之前的反抽不算数，计划等**新的**跌破收盘+新反抽序列（TAC 08-29 建计划时 08:00 反抽已完成 3.5h，仍需等窗口内新序列）。touched_zone = low20 ≤ pullback_high 且 high20 ≥ pullback_low（窗口与带重叠即可，非要求触带）。建反抽空计划前 grep 源码核对序列，勿按直觉写触发条件
+   - 对已有 `pullback_reclaim` plan，直接越过 reclaim 不一定触发，因为引擎要求先形成有效回踩/反抽序列。查询当前计划为何触发或静默时，以 `--dry-run` 实际输出为准；完整规则、序列定义和写 plan 前预检配方归属 `trading-plan-format`，本技能不重复 plan 生成/验证步骤。
    - dry-run 输出 `WATCH: ...` 行（market_filter 评估记录）**不算不静默**：包装脚本 grep 只认 `ALERT|TRIGGER|EXPIRED|EVENT_WRITTEN|ERROR|WARNING`，WATCH 不入推送 → 可正常建 Cron。但它提示大盘过滤当前正在拦截（08-17 WLD 例：BTC 1h 放量下跌 → dry-run 报 `WATCH: 暂停WLD做多`，计划未失效，但大盘稳住前触发会被 filter 挡下——正是保护生效）
 6. 有变动时：查成交记录 + `grep <SYMBOL> ~/.hermes/trading-executor.log` 交叉验证。调用：`api_get('/fapi/v1/userTrades', {'limit': 10}, signed=True)`（binance_executor **没有** get_client，直接 import api_get）；`t['time']` 是毫秒需换算
 
@@ -106,7 +106,7 @@ description: 查用户交易系统监控和持仓状态时用。例行检查命�
 用户想"盯某个价格位置"但还不是可执行交易计划时（如等 XRP 反弹到 1h MA7 再复查是否转弱），用独立观察脚本 + no_agent Cron，**不走** plan/验证/executor 链路：
 
 1. 写独立 Python 脚本（模板 `templates/watch-check.py`，线上参照 `~/.hermes/scripts/xrp-watch-check.py`）：现价 >= 观察位 → print 通知文本；否则**静默退出（exit 0 且无输出）**；state 文件防重复通知（触发一次后不再发）；回落跌破重置位自动重置，允许再次观察；API 失败静默（exit 0——no_agent 下非零退出会发错误告警）
-2. 建 Cron：`no_agent=true`、`deliver=all`、`schedule="* * * * *"`（⚠️ **禁写 `every 1m`**——interval 型有 0.4s 锚点错位，实测真实间隔 120s 慢一倍，根因见 `references/cron-cadence-and-latency.md`）；⚠️ `script` 参数用**文件名**（相对 `~/.hermes/scripts/`），绝对路径会被拒绝；⚠️ 不要传 `repeat` 参数（传 `repeat='forever'` 报 TypeError `'<=' not supported between instances of 'str' and 'int'`），省略即默认 forever（2026-08-11 实测）
+2. 建 Cron：`no_agent=true`、`deliver=all`、`schedule="* * * * *"`（⚠️ **禁用旧的 interval 型 1 分钟写法**——该类型有 0.4s 锚点错位，实测真实间隔 120s 慢一倍，根因见 `references/cron-cadence-and-latency.md`）；⚠️ `script` 参数用**文件名**（相对 `~/.hermes/scripts/`），绝对路径会被拒绝；⚠️ 不要传 `repeat` 参数（传 `repeat='forever'` 报 TypeError `'<=' not supported between instances of 'str' and 'int'`），省略即默认 forever（2026-08-11 实测）
 3. no_agent 交付语义：非空 stdout 原样发微信，空 stdout 完全静默——天然实现"触发才通知，不触发零打扰"
 4. 触发通知后由用户决定是否进入正常 plan 流程；不用时删 Cron + 脚本 + state 三样
 
@@ -140,7 +140,7 @@ description: 查用户交易系统监控和持仓状态时用。例行检查命�
 用户会质疑"这轮跑得快/输出短=跳了环节"（8-16 已是第三次）。禁止空口保证，用证据回答：
 
 1. 立即列本轮时间线：每步产出物自带时间戳（扫描文件名带时间、fetch_klines 输出"分析时间"、dry-run 的 UTC 时间戳、Cron ID、plan mtime）
-2. 环节清单逐项对照：启动前检查 → 深扫（列全参数）→ 读结果 → fetch_klines（脚本在 `~/.hermes/skills/trading-analysis/scripts/`；`--json` 输出=**顶层 list**（[{symbol, analysis_time, timeframes:{15m,1h,4h,1d}, ticker_24h, funding, open_interest}]），每周期**扁平键** `current_price/ma7/ma25/ma99/ma_state/macd_dif/macd_dea/macd_hist/rsi/rsi_state/boll_upper|middle|lower/atr`，勿按嵌套 `close/ma/macd` 字典猜字段名，会读出全 None 浪费调用。⚠️ json 模式**缺**量比/主动买盘/支撑阻力/K线形态/区间高低（08-17 实测全 None）——完整分析须用**文本模式**（重定向 /tmp 文件，terminal `sed -n` 分段读，绕开 read_file 的 ANSI binary 判定））→ 禁手检查 → R 预检 → plan → dry-run → 脚本 → Cron
+2. 环节清单逐项对照：启动前检查 → 深扫（列全参数）→ 读结果 → fetch_klines（脚本在 `~/.hermes/skills/trading-analysis/scripts/`；`--json` 输出=**顶层 list**（[{symbol, analysis_time, timeframes:{15m,1h,4h,1d}, ticker_24h, funding, open_interest}]），每周期**扁平键** `current_price/ma7/ma25/ma99/ma_state/macd_dif/macd_dea/macd_hist/rsi/rsi_state/boll_upper|middle|lower/atr`，勿按嵌套 `close/ma/macd` 字典猜字段名，会读出全 None 浪费调用。⚠️ json 模式**缺**量比/主动买盘/支撑阻力/K线形态/区间高低（08-17 实测全 None）——完整分析须用**文本模式**（重定向 /tmp 文件；fetch_klines 文本输出无 ANSI，read_file 可直接全量读（2026-08-29 PROM 轮 318 行实测），read_file 仍判 binary 时再退回 terminal `sed -n` 分段））→ 禁手检查 → R 预检 → plan → dry-run → 脚本 → Cron
    ⚠️ fetch_klines.py 对非 ASCII 符号会崩（中文名币，08-28 龙虾USDT 例：`'ascii' codec can't encode characters`，URL 未做百分号编码）→ 改用 `binance_executor.api_get('/fapi/v1/klines', {'symbol': '<中文符号>', 'interval': '15m', 'limit': 100})` 手算 MA7/MA25/RSI/量比完成同口径分析（requests 自动处理 unicode）；扫描器本身能正常拉此类币，candidate-screening 的簇脚本同病
    ⚠️ **扫描器能拉到≠K线可分析（08-29 TUTU 例）**：个别币扫描结果正常但 klines/ticker 均返回 HTTP 400、exchangeInfo 仍显示 TRADING（疑似下架前/暂停状态）→ 该候选**数据不可得 = NOT_EXECUTABLE**，禁凭扫描器快照硬分析；`api_get` 直查复核一次即可定论，不用深挖
 3. 速度合法来源说清：**同会话内前几轮已加载过的技能/参考文档可复用**——省的是文件读取时间，不是分析环节；候选币数差异、API 响应快慢也是因素。用户要求每轮强制重读技能文件时照做（多 2-3 分钟），由用户拍板
