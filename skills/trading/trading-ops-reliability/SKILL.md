@@ -30,6 +30,12 @@ description: Operational reliability patterns for the user's live crypto trading
 - 改频率后全库同步旧描述（中英文都搜：`每2分钟|every 2m|every 2 minutes|[23] minutes|3分钟|3-4 分钟`，覆盖 trading-command-center、trading-ops-reliability(+references/)、binance-executor、trading-cron.sh、binance_executor.py——脚本注释也算）。甄别三类命中：①过时描述→改；②**历史记录（bug/incident 描述）→不改**；③**规律说明→不改**。改完 `bash -n`/`py_compile` + 实跑一次 + 再 grep 复查 + 推 GitHub。
 - 工具坑：V4A 多文件补丁对含中文 UTF-8 的 `.sh` 报 "Binary file" → 该文件改用 replace 模式单独 patch。
 
+## 过期计划的监控 Cron 处置（2026-08-27 WIF 实测）
+
+plan 过期但仍有持仓时（"过期保留"机制保住 plan），对应的价格监控 Cron 已无入场职责，且每分钟会重复写 PLAN_EXPIRED 事件刷屏并触发 iLink 限流。处置：**pause 该币价格监控 Cron，保留 plan 文件**（持仓托管由事件处理 Cron 的 manage 链继续负责，与监控 Cron 是两条独立链）。平仓后彻底清（Cron+plan+state+脚本）。同币无持仓且 plan 已删的（如 ASTER 08-27）可连 Cron 带 state、脚本一并清。
+
+验证刷屏止住的口径：pause 后 `cronjob list` 的 `last_delivery_error` 仍显示最近一次限流报错——那是**停用前的历史快照，不是新故障**，勿重复排查。真判据：①等 1-2 个 Cron 周期后 `trading-events/` 目录清空；②executor 日志不再出现"计划过期"行；③后续 `last_status` 保持 ok 且无新增限流时间戳。
+
 ## Cross-Session State Conflicts (CRITICAL)
 
 - WeChat, TUI, and Desktop are **independent sessions** sharing the same Cron scheduler and filesystem.
@@ -369,3 +375,4 @@ Architecture Reassurance（"过期会不会影响持仓"）、Checking Position 
 - `references/system-architecture.md` — full trigger-to-execution flow diagram, post-entry management, multi-symbol monitoring, file locations, scanner data source
 - `references/server-disaster-recovery.md` — server deployment topology (systemd unit / data paths), 阿里云镜像恢复语义（"老照片"陷阱 + 不随镜像走的项 + 恢复后体检清单）
 - `references/conditional-order-execution.md` — 条件单触发机制案例数据（mark price 削峰、滑点结构、成交时间线重建）
+- `references/offline-strategy-backtesting.md` — 实盘策略离线回测的隔离、API限流、成交对账、CURRENT实际保护价与D1结构价双轨、MARK触发、路径边界与完成门；做历史反事实回测前必读

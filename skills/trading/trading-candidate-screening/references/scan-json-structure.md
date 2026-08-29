@@ -31,3 +31,14 @@ BTC/ETH 大盘 filter 速查（summaryRows）：`dClose < dMA7 < dMA25` = 日线
 ## stability（跨轮名单稳定性）
 
 `stability` = {jaccard: 0~1, prevAt: 上一轮扫描时间, added: [...], dropped: [...], warning: 名单跳变异常}。jaccard < 0.5 时 scanner 报 warning，只表示相邻两轮候选名单变化较大；原因可能是高潮轮动、方向切换、闪崩修复、成交额门槛变化等。它是市场切换提示，不是高潮或空仓的独立判据，须结合Top候选深度分析、量价、R与大盘结构解释。
+
+## 机械化读取（两次踩坑后固化，2026-08-29）
+
+嵌套/扁平两结构对扁平键 .get() 的静默 None 陷阱已实测两次（08-17 与 08-29：`r.get('longScore',0)` 对嵌套行全返回 0，Top20 排名输出全是 0 分，白跑一轮）。**读扫描 JSON 一律先跑防御脚本，不再手写解析**：
+
+```bash
+python3 ~/.hermes/skills/trading/trading-candidate-screening/scripts/read_scan_json.py            # 最新文件 Top15
+python3 ~/.hermes/skills/trading/trading-candidate-screening/scripts/read_scan_json.py latest 20  # Top20
+```
+
+脚本自适应两种行结构、输出分数排名榜 + stability + BTC/ETH 大盘速查。需要自定义字段时以脚本里 `_flat()` 的取值路径为基准改写，勿再按扁平键直接 .get()。

@@ -1,1 +1,62 @@
-{"alerts": {"sound": "beep", "speech": false, "wav_path": null}, "cooldown_seconds": 600, "created_at": "2026-07-31T15:55:00+08:00", "direction": "short", "entry": {"limit_price": null, "order_type": "STOP_MARKET", "trigger_price": 73.4}, "entry_trigger": 73.4, "expires_at": "2026-08-01T15:55:00+08:00", "intervals": ["15m", "1h"], "market_filter_symbols": ["BTCUSDT", "ETHUSDT"], "monitor": {"expires_after": "24h", "invalidation_condition": "15m close > 74.30（站上1H破位阴线高点+4H MA7，空头逻辑失效）", "market_filter": "BTC/ETH不出现强势反弹", "min_volume_ratio": 1.0, "trigger_condition": "15m收盘跌破73.40(当前低点73.46下方)，放量破位做空"}, "name": "SOL破位73.4做空", "risk": {"leverage": 10, "margin_usdt": 10, "quantity": 1.36}, "rules": [{"id": "breakdown_734", "level": "ALERT", "message": "SOL 15m放量收盘跌破73.40，破位做空触发", "min_volume_ratio": 1.0, "price": 73.4, "require_close": true, "side": "below", "timeframe": "15m", "type": "breakout"}, {"id": "invalidation_743", "level": "ALERT", "message": "SOL站上74.30(1H高点+4H MA7区域)，空头逻辑失效", "price": 74.3, "require_close": true, "side": "above", "timeframe": "15m", "type": "invalidation"}, {"id": "market_filter", "level": "WATCH", "message": "BTC/ETH强势反弹，暂停SOL做空", "min_volume_ratio": 1.2, "symbols": ["BTCUSDT", "ETHUSDT"], "timeframes": ["15m", "1h"], "type": "market_filter"}], "setup_type": "breakdown_short", "status": "PLAN_READY", "stop_loss": 74.3, "symbol": "SOLUSDT", "take_profits": [{"price": 72.5, "reduce_percent": 50}, {"price": 71.6, "reduce_percent": 50}]}
+{
+  "name": "SOL回踩104.45收复做多",
+  "symbol": "SOLUSDT",
+  "direction": "long",
+  "setup_type": "pullback_reclaim_long",
+  "status": "PLAN_READY",
+  "created_at": "2026-08-29T10:36:00+08:00",
+  "expires_at": "2026-08-30T10:36:00+08:00",
+  "market_filter_symbols": ["BTCUSDT", "ETHUSDT"],
+  "intervals": ["15m", "1h"],
+  "cooldown_seconds": 600,
+  "alerts": {"sound": "beep", "speech": false, "wav_path": null},
+  "entry": {"order_type": "STOP_MARKET", "trigger_price": 104.45, "limit_price": null},
+  "entry_trigger": 104.45,
+  "stop_loss": 102.1,
+  "take_profits": [
+    {"price": 110.04, "reduce_percent": 50},
+    {"price": 110.6, "reduce_percent": 50}
+  ],
+  "risk": {"margin_usdt": 10, "leverage": 10, "quantity": 0.96},
+  "monitor": {
+    "trigger_condition": "15m收盘站上104.45(回踩103.2-104.4缩量企稳后收复箱体上沿),回踩确认做多触发",
+    "min_volume_ratio": 1.0,
+    "invalidation_condition": "实时跌破102.1(24h低点102.18下方结构位,多头逻辑失效)",
+    "market_filter": "BTC/ETH不出现放量下跌",
+    "expires_after": "24h"
+  },
+  "rules": [
+    {
+      "id": "pullback_reclaim_10445",
+      "level": "ALERT",
+      "type": "pullback_reclaim",
+      "side": "above",
+      "pullback_low": 103.2,
+      "pullback_high": 104.4,
+      "reclaim_price": 104.45,
+      "invalidation_price": 102.1,
+      "timeframe": "15m",
+      "min_volume_ratio": 1.0,
+      "message": "SOL 15m回踩103.2-104.4后收复104.45,回踩确认做多触发"
+    },
+    {
+      "id": "invalidation_1021",
+      "level": "ALERT",
+      "type": "invalidation",
+      "side": "below",
+      "price": 102.1,
+      "timeframe": "15m",
+      "require_close": false,
+      "message": "SOL跌破102.1(24h低点下方),多头逻辑失效"
+    },
+    {
+      "id": "market_filter",
+      "level": "WATCH",
+      "type": "market_filter",
+      "symbols": ["BTCUSDT", "ETHUSDT"],
+      "timeframes": ["15m", "1h"],
+      "min_volume_ratio": 1.2,
+      "message": "BTC/ETH放量下跌,暂停SOL做多"
+    }
+  ]
+}

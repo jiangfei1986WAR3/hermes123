@@ -1,0 +1,62 @@
+{
+  "name": "INJ反抽5.15受阻做空",
+  "symbol": "INJUSDT",
+  "direction": "short",
+  "setup_type": "pullback_reclaim_short",
+  "status": "PLAN_READY",
+  "created_at": "2026-08-29T12:20:00+08:00",
+  "expires_at": "2026-08-30T12:20:00+08:00",
+  "market_filter_symbols": ["BTCUSDT", "ETHUSDT"],
+  "intervals": ["15m", "1h"],
+  "cooldown_seconds": 600,
+  "alerts": {"sound": "beep", "speech": false, "wav_path": null},
+  "entry": {"order_type": "STOP_MARKET", "trigger_price": 5.15, "limit_price": null},
+  "entry_trigger": 5.15,
+  "stop_loss": 5.24,
+  "take_profits": [
+    {"price": 5.02, "reduce_percent": 50},
+    {"price": 4.92, "reduce_percent": 50}
+  ],
+  "risk": {"margin_usdt": 10, "leverage": 10, "quantity": 19.4},
+  "monitor": {
+    "trigger_condition": "15m收盘跌回5.15(反抽5.127-5.192阻力带失败后跌回),反抽确认做空触发",
+    "min_volume_ratio": 1.0,
+    "invalidation_condition": "实时涨破5.24(1h MA25上方,空头逻辑失效)",
+    "market_filter": "BTC/ETH不出现放量强势上涨",
+    "expires_after": "24h"
+  },
+  "rules": [
+    {
+      "id": "pullback_reclaim_515",
+      "level": "ALERT",
+      "type": "pullback_reclaim",
+      "side": "below",
+      "pullback_low": 5.127,
+      "pullback_high": 5.192,
+      "reclaim_price": 5.15,
+      "invalidation_price": 5.24,
+      "timeframe": "15m",
+      "min_volume_ratio": 1.0,
+      "message": "INJ 15m反抽5.127-5.192后跌回5.15,反抽受阻做空触发"
+    },
+    {
+      "id": "invalidation_524",
+      "level": "ALERT",
+      "type": "invalidation",
+      "side": "above",
+      "price": 5.24,
+      "timeframe": "15m",
+      "require_close": false,
+      "message": "INJ涨破5.24(1h MA25上方),空头逻辑失效"
+    },
+    {
+      "id": "market_filter",
+      "level": "WATCH",
+      "type": "market_filter",
+      "symbols": ["BTCUSDT", "ETHUSDT"],
+      "timeframes": ["15m", "1h"],
+      "min_volume_ratio": 1.2,
+      "message": "BTC/ETH放量强势上涨,暂停INJ做空"
+    }
+  ]
+}

@@ -70,6 +70,25 @@ python3 ~/.hermes/skills/trading/trading-architecture-audit/scripts/audit.py --m
 
 The approved runtime and document baselines are immutable during normal audits. `references/approved-hashes.json` contains five execution hashes. `references/approved-documents.json` inventories approved `.md/.json/.py/.sh` files in twelve trading knowledge directories. Updating either requires an explicit user instruction after reviewing the intended diff. The auditor itself has no update command.
 
+## New Content Admission Check
+
+Before adding or modifying any trading skill, reference, or incident-log entry, perform this lightweight manual check:
+
+1. Is this a stable reusable rule, or a single incident?
+2. Which system layer owns it?
+3. Does it change another layer's final decision authority?
+4. Does it introduce an unapproved hard gate? If so, mark it `PROPOSED / NOT ACTIVE` and do not deploy it.
+5. Is there real evidence and a reproducible source?
+
+Placement:
+- Stable cross-scenario workflow → the owning skill.
+- Detailed but stable mechanism → a reference file.
+- Single incident or one-off numeric example → `incident-log.md`.
+- Unapproved suggestion → a reference with `PROPOSED / NOT ACTIVE`.
+- Runtime behavior change → a separate code-change audit; do not treat documentation approval as runtime approval.
+
+This is a manual admission checklist only. It does not modify runtime behavior, auto-update baselines, or make the auditor enforce policy automatically.
+
 ## Pitfalls
 
 - `PASS` proves the checked architecture invariants, not that a trade will win.

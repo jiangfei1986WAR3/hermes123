@@ -44,6 +44,7 @@ signal_monitor.py 的 `rules[].type` 只有以下 4 种，其他任何写法都�
 - `had_pullback`（做多）：closes20 里"最早收盘 ≥ reclaim 之后出现过收盘 < reclaim"才算真回踩，直接路过不触发（dry-run 静默的依据）
 - `touched_zone`（源码）：`low20 <= pullback_high and high20 >= pullback_low`——近20根K线窗口内低/高触碰过区即算，**不是"当前价在区内"**。回踩/反抽发生在最近20根内（15m×20=5小时）→ 同参数重建大概率仍非静默，需换更深的区或等窗口滑出
 - **深回踩静默构造（08-18 SOL 例 ✅）**：把 pullback 区设在 low20 最低点**之下**（近20根尚未触及的位置）→ touched_zone=False 强制静默，价格真回踩进区后才激活。SOL：现价 75.93、low20 最低 75.59 → 区设 75.30-75.45 → dry-run 静默 → 建 Cron 成功。选浅区（已被触及，靠 reclaimed=False 静默）还是深区（touched_zone=False 强制静默）取决于想等的回踩深度
+- **触区+现价在 reclaim 上方 ≠ 必触发（08-28 STX 例 ✅）**：区在 20 根窗口内被触碰（touched_zone=True）且 lastClosedClose ≥ reclaim（reclaimed=True）仍可能静默——若该触碰发生在窗口内**首个 ≥reclaim 收盘之前**（价格自下而上"直接路过"，从未先收复再回落），had_pullback=False → dry-run 静默，可正常建。STX：15:45 低点 0.2577 落在区 0.2577-0.2605 内但此前无 ≥0.2623 收盘，之后一路向上——dry-run 实测静默。手推 touched_zone/had_pullback/reclaimed 三条件易错：写 plan 前可拉 20 根 15m 收盘+低点预判，最终一律以真实 `--dry-run` 裁决，非静默再按验证拦截规则处理
 - **"机会已完成"删计划后，若按现价追入 R 仍达标**（01:12 FIL 例：现价追入止损不变 TP1 仍 1.6R）：把"换参数重建可追"的选择权交给用户并给现价追入 R 数字，不自动建、不劝；用户答"算了不凑数"=接受放弃（用户定调 08-18）
 - `reclaimed` 用 `lastClosedClose`（最近**已收盘**K线收盘价，未收盘K不算）：当前K线未收盘大跌时，上一根已收盘K仍可能满足 reclaimed → dry-run 瞬时 ALERT，当前K收盘后信号消失（2026-08-18 LINK 例：01:00 未收盘跌至 9.488 但 00:45 已收盘 9.558≥9.51 → 触发；FIL 例已收盘持久满足=机会真已完成）。dry-run 非静默先看当前K是否已收盘，再分"瞬时态"vs"机会已完成"（后者按验证拦截规则删）
 - ⚠️ 规则内 invalidation_price 只在 pullback_reclaim 自身评估时检查：价格直接暴跌穿过失效线、未经历回踩流程时**不写任何事件**，plan 挂着不失效 → 回踩计划必须**额外加一条独立 invalidation 规则**兜底（LINK 例：规则内失效 9.20 + 独立 `invalidation` 9.20 below require_close=false 双保险）
@@ -80,9 +81,11 @@ signal_monitor 管触发（rules），binance_executor 管下单，两者读同�
 
 - `entry_trigger` 或 `entry.trigger_price`：触发价
 - `stop_loss`、`take_profits`: [{price, reduce_percent}]（reduce_percent 默认 50）
+- **TP 数组顺序 = 成交顺序：`take_profits[0]`（TP1）必须是距 `entry_trigger` 最近的一档**（空头=两档中较高价，多头=两档中较低价）。TP1 先成交才触发移保本+按剩余量重挂 TP2；把远端强目标写在数组首位=移保本扳机绑到远端，近档成交后 SL 仍留在原位。2026-08-29 PENGU 例：初版 TP1=0.008774（远、1.63R）/TP2=0.008832（近、1.34R）顺序写反，建完 Cron 自检才发现并 patch 修正。生成 plan 前自检一行：`|TP[0]−触发| < |TP[1]−触发|`
 - 方向校验：空单要求 TP < entry < stop；多单要求 stop < entry < TP（反了直接报错拒单）
 - `expires_at`：ISO 时间戳（带时区，如 `2026-08-07T19:30:00+08:00`）；过期后 signal_monitor 写 PLAN_EXPIRED，executor 自动清理
 - **不要写 quantity**：executor 按 margin(10U)×leverage÷entry 自算并取整（BTC 20x 其他 10x）
+- **查数量/价格精度**：`from binance_executor import get_symbol_info` → `get_symbol_info('<SYM>')` 返回 `{price_precision, quantity_precision, filters:{...}}`。⚠️ `filters` 是**按 filterType 为键的 dict**（`filters['LOT_SIZE']['stepSize']`），不是 list——`for f in info.get('filters',[]): f['filterType']` 遍历会 TypeError（08-28 实测）。qty 取整按 `quantity_precision`（CHIP quantity_precision=0 → 整数），最小步进看 `filters['LOT_SIZE']['stepSize']`
 
 ## 生成后必验证（建 Cron 前）
 
@@ -90,12 +93,14 @@ signal_monitor 管触发（rules），binance_executor 管下单，两者读同�
 python3 /root/.hermes/skills/auto-signal-monitor/scripts/signal_monitor.py --plan ~/.hermes/trading-plans/<SYMBOL>-plan.json --dry-run
 ```
 
+- ⚠️ **写 plan 前先验止损侧位（08-29 EDEN 例）**：突破多单 stop/invalidation 必须**低于现价**（破位空反之必须高于现价）。止损设在现价错误一侧 → dry-run 必报 invalidation ALERT → 按拦截规则删计划，白走一轮。EDEN：现价 0.06802 已低于拟设浅止损 0.07196，计划创建即死；止损下移到现价下方则 R 1.20R 压线 + 风险额 11.5U 翻倍 → 直接 WATCH_ONLY，省掉写文件+dry-run+删除一轮
 - 出现 "未知规则类型" 警告 = 格式错，修正后再建 Cron
 - 静默（no trigger / DONT_NOTIFY）= 正常等待触发
 - 触发已发生 = 按验证拦截规则处理（回踩/失效类 → 不建；突破类 → 正常建）
 
 ## Cron 部署要点
 
+- ⚠️ `cronjob action=create` **不显式传 `deliver` 会默认 `local`**（返回体 deliver='local'）——触发通知到不了微信。监控 Cron 必须显式 `deliver=all`（对照现有 CYS 监控就是 deliver: all）。已踩坑：2026-08-27 WIF/ASTER 建 Cron 漏传 deliver → 返回 local → 用 `action=update job_id=... deliver=all` 修正。create 时一次性带全 name/schedule/script/no_agent/deliver，别补第二次
 - create 时 `script` 参数必须用**相对 `~/.hermes/scripts/` 的文件名**（如 `bchusdt-monitor-check.sh`）；绝对路径直接报错 `Script path must be relative to ~/.hermes/scripts/`
 - no_agent=true 交付语义：**非空 stdout 原样通知；空 stdout 完全静默；非零退出码发错误告警** —— 脚本里网络失败要 `exit 0` 静默，别让瞬断触发误报
 - monitor-check.sh 第一行 `[ ! -f "$PLAN" ] && exit 0` 自我保护（plan 被删/失效后监控静默，不误报）

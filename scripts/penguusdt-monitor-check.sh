@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-PLAN="$HOME/.hermes/trading-plans/SOLUSDT-plan.json"
+PLAN="$HOME/.hermes/trading-plans/PENGUUSDT-plan.json"
 MONITOR="$HOME/.hermes/skills/auto-signal-monitor/scripts/signal_monitor.py"
 [ ! -f "$PLAN" ] && exit 0
 OUTPUT=$(python3 "$MONITOR" --plan "$PLAN" 2>&1 | grep -v "DONT_NOTIFY")
